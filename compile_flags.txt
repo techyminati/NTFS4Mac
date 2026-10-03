@@ -1,0 +1,5 @@
+-std=gnu11
+-DHAVE_CONFIG_H
+-Ibuild/ntfs-3g/include/ntfs-3g
+-Isrc/core
+-Wall
