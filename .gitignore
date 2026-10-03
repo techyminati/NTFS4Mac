@@ -1,0 +1,12 @@
+# build output
+/build/
+/DerivedData/
+*.o
+*.a
+*.dSYM/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+# test images
+*.img
+/tests/tmp/
