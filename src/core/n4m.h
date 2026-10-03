@@ -116,12 +116,12 @@ enum {
 	N4M_SET_MTIME_NOW = 1 << 9,
 };
 
-typedef struct n4m_setattr {
+typedef struct n4m_setattr_req {
 	uint32_t mask;
 	uint64_t size;
 	uint32_t mode, uid, gid, flags;
 	struct timespec atime, mtime, btime;
-} n4m_setattr;
+} n4m_setattr_req;
 
 /* Volume life cycle */
 int n4m_mount(n4m_blockdev *dev, const n4m_mount_opts *opts,
@@ -138,7 +138,7 @@ int n4m_probe(n4m_blockdev *dev, char *label, size_t labelsz,
 
 /* Items. ino is always an MFT record number. */
 int n4m_getattr(n4m_volume *vol, uint64_t ino, n4m_attr *attr);
-int n4m_setattr(n4m_volume *vol, uint64_t ino, const n4m_setattr *sa,
+int n4m_setattr(n4m_volume *vol, uint64_t ino, const n4m_setattr_req *sa,
 		n4m_attr *attr);
 int n4m_lookup(n4m_volume *vol, uint64_t dir, const char *name,
 		n4m_attr *attr);
@@ -149,15 +149,22 @@ int n4m_lookup(n4m_volume *vol, uint64_t dir, const char *name,
  * The callback gets each entry together with the cookie to resume after it.
  * Return nonzero from the callback to stop; the stopped entry is not
  * consumed and will be delivered again when resuming from the previous
- * cookie. Start with cookie 0. "." and ".." are included.
+ * cookie. Start with cookie 0. "." and ".." are included unless
+ * N4M_READDIR_NO_DOTS is set. attr is only filled with N4M_READDIR_ATTRS.
+ *
+ * The callback runs with the volume locked, it must not call back into
+ * the engine.
  */
 typedef int (*n4m_dirent_cb)(void *ctx, const char *name, size_t namelen,
-		uint64_t ino, int type, uint64_t next_cookie);
+		uint64_t ino, int type, uint64_t next_cookie,
+		const n4m_attr *attr);
 enum {
-	/* Skip Windows "protected operating system files" (hidden+system) */
+	/* Skip Windows system folders in the root ($RECYCLE.BIN etc) */
 	N4M_READDIR_HIDE_PROTECTED = 1 << 0,
 	/* Skip "." and ".." */
 	N4M_READDIR_NO_DOTS = 1 << 1,
+	/* Fill attributes for every entry */
+	N4M_READDIR_ATTRS = 1 << 2,
 };
 int n4m_readdir(n4m_volume *vol, uint64_t dir, uint64_t cookie, int flags,
 		n4m_dirent_cb cb, void *ctx, bool *eof);
