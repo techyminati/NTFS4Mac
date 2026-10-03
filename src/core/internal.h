@@ -15,6 +15,7 @@
 #include "types.h"
 #include "attrib.h"
 #include "cache.h"
+#include "bootsect.h"
 #include "device.h"
 #include "dir.h"
 #include "ea.h"
@@ -42,6 +43,7 @@ struct n4m_volume {
 	bool readonly;
 	bool was_hibernated;
 	bool was_dirty;
+	uint64_t serial;
 	uint64_t tmp_seq;	/* for temporary names during rename */
 };
 
