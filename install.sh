@@ -77,6 +77,9 @@ cat <<'EOF'
   before installing it! YOU are choosing to install it, and if you point
   the finger at us for messing up your drives, we will laugh at you.
 
+  NTFS4Mac is free software. If you paid anyone for it, you were
+  scammed: ask for your money back and report the seller.
+
   Back up anything you care about, and always eject before unplugging.
 
 ==========================================================================
