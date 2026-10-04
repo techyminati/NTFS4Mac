@@ -1,0 +1,947 @@
+/*
+ * NFSv3 procedures (RFC 1813), each mapped onto an engine call.
+ */
+#include <errno.h>
+#include <stdio.h>
+#include <sys/stat.h>
+
+#include "nfs.h"
+
+#define FH_MAGIC 0x4e344d31u	/* "N4M1" */
+
+enum {
+	NF3REG = 1, NF3DIR, NF3BLK, NF3CHR, NF3LNK, NF3SOCK, NF3FIFO,
+};
+
+enum { UNSTABLE = 0, DATA_SYNC = 1, FILE_SYNC = 2 };
+enum { UNCHECKED = 0, GUARDED = 1, EXCLUSIVE = 2 };
+enum { DONT_CHANGE = 0, SET_TO_SERVER_TIME = 1, SET_TO_CLIENT_TIME = 2 };
+
+#define ACCESS3_READ	0x01
+#define ACCESS3_LOOKUP	0x02
+#define ACCESS3_MODIFY	0x04
+#define ACCESS3_EXTEND	0x08
+#define ACCESS3_DELETE	0x10
+#define ACCESS3_EXECUTE	0x20
+
+#define FSF3_LINK	0x01
+#define FSF3_SYMLINK	0x02
+#define FSF3_HOMOGENEOUS 0x08
+#define FSF3_CANSETTIME	0x10
+
+static inline uint64_t ino_of(uint64_t ref)
+{
+	return ref & 0x0000ffffffffffffULL;
+}
+
+uint32_t nfs_errno_to_stat(int err)
+{
+	switch (err) {
+	case 0:			return NFS3_OK;
+	case EPERM:		return NFS3ERR_PERM;
+	case ENOENT:		return NFS3ERR_NOENT;
+	case ENXIO:		return NFS3ERR_NXIO;
+	case EACCES:		return NFS3ERR_ACCES;
+	case EEXIST:		return NFS3ERR_EXIST;
+	case EXDEV:		return NFS3ERR_XDEV;
+	case ENODEV:		return NFS3ERR_NODEV;
+	case ENOTDIR:		return NFS3ERR_NOTDIR;
+	case EISDIR:		return NFS3ERR_ISDIR;
+	case EINVAL:		return NFS3ERR_INVAL;
+	case EILSEQ:		return NFS3ERR_INVAL;
+	case EFBIG:		return NFS3ERR_FBIG;
+	case ENOSPC:		return NFS3ERR_NOSPC;
+	case EROFS:		return NFS3ERR_ROFS;
+	case EMLINK:		return NFS3ERR_MLINK;
+	case ENAMETOOLONG:	return NFS3ERR_NAMETOOLONG;
+	case ENOTEMPTY:		return NFS3ERR_NOTEMPTY;
+	case EDQUOT:		return NFS3ERR_DQUOT;
+	case ESTALE:		return NFS3ERR_STALE;
+	case ENOTSUP:		return NFS3ERR_NOTSUPP;
+	default:		return NFS3ERR_IO;
+	}
+}
+
+/* ---- handles and attributes ------------------------------------------ */
+
+void nfs_put_fh(struct nfs_server *s, struct xdr_out *out, uint64_t ref)
+{
+	xdr_put_u32(out, NFS_FHSIZE);
+	xdr_put_u32(out, FH_MAGIC);
+	xdr_put_u32(out, (uint32_t)s->fsid);
+	xdr_put_u64(out, ref);
+}
+
+/* Reads a file handle. Returns an nfsstat3. */
+static uint32_t get_fh(struct nfs_server *s, struct xdr_in *in, uint64_t *ref)
+{
+	size_t len;
+	const uint8_t *p = xdr_get_opaque(in, 64, &len);
+	struct xdr_in h;
+
+	*ref = 0;
+	if (!p)
+		return NFS3ERR_BADHANDLE;
+	if (len != NFS_FHSIZE)
+		return NFS3ERR_BADHANDLE;
+	h = (struct xdr_in){ .p = p, .len = len };
+	if (xdr_get_u32(&h) != FH_MAGIC)
+		return NFS3ERR_BADHANDLE;
+	if (xdr_get_u32(&h) != (uint32_t)s->fsid)
+		return NFS3ERR_STALE;
+	*ref = xdr_get_u64(&h);
+	return NFS3_OK;
+}
+
+/* getattr that also checks the handle's sequence number */
+static int getattr_ref(struct nfs_server *s, uint64_t ref, n4m_attr *a)
+{
+	int err = n4m_getattr(s->vol, ino_of(ref), a);
+
+	if (!err && a->ref != ref)
+		err = ESTALE;	/* the MFT record got reused */
+	return err;
+}
+
+static void put_time(struct xdr_out *out, struct timespec ts)
+{
+	if (ts.tv_sec < 0)
+		ts.tv_sec = ts.tv_nsec = 0;
+	if (ts.tv_sec > 0xffffffffLL)
+		ts.tv_sec = 0xffffffffLL;
+	xdr_put_u32(out, (uint32_t)ts.tv_sec);
+	xdr_put_u32(out, (uint32_t)ts.tv_nsec);
+}
+
+static void put_fattr(struct nfs_server *s, struct xdr_out *out,
+		const n4m_attr *a)
+{
+	uint32_t type, mode = a->mode;
+
+	switch (a->type) {
+	case N4M_TYPE_DIR:	type = NF3DIR; break;
+	case N4M_TYPE_SYMLINK:	type = NF3LNK; break;
+	case N4M_TYPE_BLK:	type = NF3BLK; break;
+	case N4M_TYPE_CHR:	type = NF3CHR; break;
+	case N4M_TYPE_SOCK:	type = NF3SOCK; break;
+	case N4M_TYPE_FIFO:	type = NF3FIFO; break;
+	default:		type = NF3REG; break;
+	}
+	/* Windows read-only files show up without write permission */
+	if (s->readonly || (a->flags & UF_IMMUTABLE))
+		mode &= ~0222u;
+	xdr_put_u32(out, type);
+	xdr_put_u32(out, mode);
+	xdr_put_u32(out, a->nlink);
+	xdr_put_u32(out, s->uid);
+	xdr_put_u32(out, s->gid);
+	xdr_put_u64(out, a->size);
+	xdr_put_u64(out, a->alloc_size);
+	xdr_put_u32(out, (uint32_t)major((dev_t)a->rdev));
+	xdr_put_u32(out, (uint32_t)minor((dev_t)a->rdev));
+	xdr_put_u64(out, s->fsid);
+	xdr_put_u64(out, a->ino);
+	put_time(out, a->atime);
+	put_time(out, a->mtime);
+	put_time(out, a->ctime);
+}
+
+static void put_post_attr(struct nfs_server *s, struct xdr_out *out,
+		const n4m_attr *a)
+{
+	xdr_put_bool(out, a != NULL);
+	if (a)
+		put_fattr(s, out, a);
+}
+
+static void put_post_attr_ref(struct nfs_server *s, struct xdr_out *out,
+		uint64_t ref)
+{
+	n4m_attr a;
+
+	put_post_attr(s, out, ref && !getattr_ref(s, ref, &a) ? &a : NULL);
+}
+
+struct pre_attr {
+	bool valid;
+	uint64_t size;
+	struct timespec mtime, ctime;
+};
+
+static void get_pre(struct nfs_server *s, uint64_t ref, struct pre_attr *p)
+{
+	n4m_attr a;
+
+	p->valid = ref && !getattr_ref(s, ref, &a);
+	if (p->valid) {
+		p->size = a.size;
+		p->mtime = a.mtime;
+		p->ctime = a.ctime;
+	}
+}
+
+static void put_wcc(struct nfs_server *s, struct xdr_out *out,
+		const struct pre_attr *pre, uint64_t ref)
+{
+	xdr_put_bool(out, pre && pre->valid);
+	if (pre && pre->valid) {
+		xdr_put_u64(out, pre->size);
+		put_time(out, pre->mtime);
+		put_time(out, pre->ctime);
+	}
+	put_post_attr_ref(s, out, ref);
+}
+
+/* ---- sattr3 ----------------------------------------------------------- */
+
+struct sattr {
+	bool set_mode, set_uid, set_gid, set_size;
+	uint32_t mode, uid, gid;
+	uint64_t size;
+	uint32_t atime_how, mtime_how;
+	struct timespec atime, mtime;
+};
+
+static void get_time(struct xdr_in *in, struct timespec *ts)
+{
+	ts->tv_sec = xdr_get_u32(in);
+	ts->tv_nsec = xdr_get_u32(in);
+	if (ts->tv_nsec >= 1000000000)
+		ts->tv_nsec = 999999999;
+}
+
+static void get_sattr(struct xdr_in *in, struct sattr *sa)
+{
+	memset(sa, 0, sizeof(*sa));
+	if ((sa->set_mode = xdr_get_bool(in)))
+		sa->mode = xdr_get_u32(in);
+	if ((sa->set_uid = xdr_get_bool(in)))
+		sa->uid = xdr_get_u32(in);
+	if ((sa->set_gid = xdr_get_bool(in)))
+		sa->gid = xdr_get_u32(in);
+	if ((sa->set_size = xdr_get_bool(in)))
+		sa->size = xdr_get_u64(in);
+	sa->atime_how = xdr_get_u32(in);
+	if (sa->atime_how == SET_TO_CLIENT_TIME)
+		get_time(in, &sa->atime);
+	sa->mtime_how = xdr_get_u32(in);
+	if (sa->mtime_how == SET_TO_CLIENT_TIME)
+		get_time(in, &sa->mtime);
+}
+
+/* Applies an sattr3 to an item. a holds its current attributes. */
+static int apply_sattr(struct nfs_server *s, const n4m_attr *a,
+		const struct sattr *sa)
+{
+	n4m_setattr_req r = { 0 };
+
+	if (sa->set_size) {
+		if (a->type == N4M_TYPE_DIR)
+			return EISDIR;
+		r.mask |= N4M_SET_SIZE;
+		r.size = sa->size;
+	}
+	/*
+	 * NTFS has no Unix modes. The owner write bit maps to the Windows
+	 * read-only attribute on files, everything else is accepted as is.
+	 */
+	if (sa->set_mode && a->type == N4M_TYPE_FILE) {
+		uint32_t flags = a->flags & ~(uint32_t)UF_IMMUTABLE;
+
+		if (!(sa->mode & 0200))
+			flags |= UF_IMMUTABLE;
+		if (flags != a->flags) {
+			r.mask |= N4M_SET_FLAGS;
+			r.flags = flags;
+		}
+	}
+	if (sa->atime_how == SET_TO_SERVER_TIME)
+		r.mask |= N4M_SET_ATIME_NOW;
+	else if (sa->atime_how == SET_TO_CLIENT_TIME) {
+		r.mask |= N4M_SET_ATIME;
+		r.atime = sa->atime;
+	}
+	if (sa->mtime_how == SET_TO_SERVER_TIME)
+		r.mask |= N4M_SET_MTIME_NOW;
+	else if (sa->mtime_how == SET_TO_CLIENT_TIME) {
+		r.mask |= N4M_SET_MTIME;
+		r.mtime = sa->mtime;
+	}
+	if (!r.mask)
+		return 0;
+	/* clearing read-only must happen before a truncate */
+	if ((r.mask & N4M_SET_FLAGS) && (r.mask & N4M_SET_SIZE) &&
+			!(r.flags & UF_IMMUTABLE)) {
+		n4m_setattr_req f = { .mask = N4M_SET_FLAGS, .flags = r.flags };
+		int err = n4m_setattr(s->vol, a->ino, &f, NULL);
+
+		if (err)
+			return err;
+		r.mask &= ~(uint32_t)N4M_SET_FLAGS;
+	}
+	return n4m_setattr(s->vol, a->ino, &r, NULL);
+}
+
+/* ---- procedures ------------------------------------------------------- */
+
+#define ARGS_OK(in, out) do { \
+	if ((in)->err) { \
+		xdr_put_u32(out, RPC_GARBAGE_ARGS); \
+		return; \
+	} \
+	xdr_put_u32(out, RPC_SUCCESS); \
+} while (0)
+
+static void p_getattr(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+	n4m_attr a;
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, ref, &a));
+	xdr_put_u32(out, st);
+	if (st == NFS3_OK)
+		put_fattr(s, out, &a);
+}
+
+static void p_setattr(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+	struct sattr sa;
+	struct timespec guard = { 0 };
+	bool check;
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+
+	get_sattr(in, &sa);
+	if ((check = xdr_get_bool(in)))
+		get_time(in, &guard);
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, ref, &a));
+	if (st == NFS3_OK) {
+		pre = (struct pre_attr){ true, a.size, a.mtime, a.ctime };
+		if (check && (guard.tv_sec != a.ctime.tv_sec ||
+				guard.tv_nsec != a.ctime.tv_nsec))
+			st = NFS3ERR_NOT_SYNC;
+		else
+			st = nfs_errno_to_stat(apply_sattr(s, &a, &sa));
+	}
+	xdr_put_u32(out, st);
+	put_wcc(s, out, &pre, ref);
+}
+
+static void p_lookup(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir);
+	char name[NFS_MAXNAME + 1];
+	n4m_attr a;
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK && !name_ok)
+		st = NFS3ERR_NOENT;
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(n4m_lookup(s->vol, ino_of(dir), name,
+				&a));
+	xdr_put_u32(out, st);
+	if (st == NFS3_OK) {
+		nfs_put_fh(s, out, a.ref);
+		put_post_attr(s, out, &a);
+	}
+	put_post_attr_ref(s, out, dir);
+}
+
+static void p_access(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+	uint32_t want = xdr_get_u32(in), grant = 0;
+	n4m_attr a;
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, ref, &a));
+	xdr_put_u32(out, st);
+	if (st != NFS3_OK) {
+		put_post_attr(s, out, NULL);
+		return;
+	}
+	grant = want;
+	if (s->readonly)
+		grant &= ~(uint32_t)(ACCESS3_MODIFY | ACCESS3_EXTEND |
+				ACCESS3_DELETE);
+	if (a.type != N4M_TYPE_DIR) {
+		if (a.flags & UF_IMMUTABLE)
+			grant &= ~(uint32_t)(ACCESS3_MODIFY | ACCESS3_EXTEND);
+		if (!(a.mode & 0111))
+			grant &= ~(uint32_t)ACCESS3_EXECUTE;
+	}
+	put_post_attr(s, out, &a);
+	xdr_put_u32(out, grant);
+}
+
+static void p_readlink(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+	char path[NFS_MAXPATH + 1];
+	size_t len = 0;
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(n4m_readlink(s->vol, ino_of(ref), path,
+				sizeof(path), &len));
+	if (st == NFS3_OK && len > NFS_MAXPATH)
+		st = NFS3ERR_NAMETOOLONG;
+	xdr_put_u32(out, st);
+	put_post_attr_ref(s, out, ref);
+	if (st == NFS3_OK)
+		xdr_put_string(out, path);
+}
+
+static void p_read(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref, off;
+	uint32_t count, st = get_fh(s, in, &ref);
+	size_t got = 0, st_at, count_at, len_at;
+	n4m_attr a;
+	int err;
+
+	off = xdr_get_u64(in);
+	count = xdr_get_u32(in);
+	ARGS_OK(in, out);
+	if (count > NFS_MAXDATA)
+		count = NFS_MAXDATA;
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, ref, &a));
+	if (st == NFS3_OK && a.type == N4M_TYPE_DIR)
+		st = NFS3ERR_ISDIR;
+	if (st != NFS3_OK) {
+		xdr_put_u32(out, st);
+		put_post_attr(s, out, st == NFS3ERR_ISDIR ? &a : NULL);
+		return;
+	}
+	st_at = out->len;
+	xdr_put_u32(out, NFS3_OK);
+	put_post_attr(s, out, &a);
+	count_at = out->len;
+	xdr_put_u32(out, 0);		/* count */
+	xdr_put_bool(out, false);	/* eof */
+	len_at = out->len;
+	xdr_put_u32(out, 0);		/* data length */
+	if (!xdr_reserve(out, (size_t)count + 4))
+		return;
+	err = n4m_read(s->vol, a.ino, off, count, out->p + out->len, &got);
+	if (err && !got) {
+		/* rewrite as an error reply */
+		out->len = st_at;
+		xdr_put_u32(out, nfs_errno_to_stat(err));
+		put_post_attr(s, out, &a);
+		return;
+	}
+	out->len += got;
+	while (out->len & 3)
+		out->p[out->len++] = 0;
+	xdr_set_u32(out, count_at, (uint32_t)got);
+	xdr_set_u32(out, count_at + 4, off + got >= a.size);
+	xdr_set_u32(out, len_at, (uint32_t)got);
+}
+
+static void p_write(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref, off;
+	uint32_t count, stable, st = get_fh(s, in, &ref);
+	const uint8_t *data;
+	size_t len = 0, written = 0;
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+
+	off = xdr_get_u64(in);
+	count = xdr_get_u32(in);
+	stable = xdr_get_u32(in);
+	data = xdr_get_opaque(in, NFS_MAXDATA, &len);
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, ref, &a));
+	if (st == NFS3_OK) {
+		pre = (struct pre_attr){ true, a.size, a.mtime, a.ctime };
+		if (len < count)
+			count = (uint32_t)len;
+		st = nfs_errno_to_stat(n4m_write(s->vol, a.ino, off, count,
+				data, &written));
+		if (written)
+			s->dirty = true;
+		if (st == NFS3_OK && stable != UNSTABLE) {
+			n4m_close_write(s->vol, a.ino);
+			n4m_sync(s->vol);
+		}
+	}
+	xdr_put_u32(out, st);
+	put_wcc(s, out, &pre, ref);
+	if (st == NFS3_OK) {
+		xdr_put_u32(out, (uint32_t)written);
+		xdr_put_u32(out, stable == UNSTABLE ? UNSTABLE : FILE_SYNC);
+		xdr_put_fixed(out, s->writeverf, 8);
+	}
+}
+
+/* Reply for CREATE, MKDIR and SYMLINK */
+static void put_create_res(struct nfs_server *s, struct xdr_out *out,
+		uint32_t st, const n4m_attr *a, const struct pre_attr *pre,
+		uint64_t dir)
+{
+	xdr_put_u32(out, st);
+	if (st == NFS3_OK) {
+		xdr_put_bool(out, true);
+		nfs_put_fh(s, out, a->ref);
+		put_post_attr(s, out, a);
+	}
+	put_wcc(s, out, pre, dir);
+}
+
+static void p_create(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir), how;
+	char name[NFS_MAXNAME + 1];
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+	struct sattr sa = { 0 };
+	uint8_t verf[8] = { 0 };
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+	int err;
+
+	how = xdr_get_u32(in);
+	if (how == EXCLUSIVE)
+		xdr_get_fixed(in, verf, 8);
+	else
+		get_sattr(in, &sa);
+	ARGS_OK(in, out);
+	if (st == NFS3_OK && !name_ok)
+		st = NFS3ERR_INVAL;
+	if (st != NFS3_OK) {
+		put_create_res(s, out, st, NULL, NULL, 0);
+		return;
+	}
+	get_pre(s, dir, &pre);
+	/* the exclusive create verifier is kept in the access time */
+	struct timespec vt = {
+		.tv_sec = (time_t)((uint32_t)verf[0] << 24 | verf[1] << 16 |
+				verf[2] << 8 | verf[3]),
+		.tv_nsec = (long)(((uint32_t)verf[4] << 24 | verf[5] << 16 |
+				verf[6] << 8 | verf[7]) % 1000000000u),
+	};
+
+	err = n4m_lookup(s->vol, ino_of(dir), name, &a);
+	if (!err) {
+		if (how == GUARDED)
+			err = EEXIST;
+		else if (how == EXCLUSIVE)
+			err = (a.atime.tv_sec == vt.tv_sec &&
+				a.atime.tv_nsec / 100 == vt.tv_nsec / 100) ?
+				0 : EEXIST;
+		else if (a.type != N4M_TYPE_FILE)
+			err = EEXIST;
+		else if (sa.set_size)
+			err = apply_sattr(s, &a, &sa);
+	} else if (err == ENOENT) {
+		err = n4m_create(s->vol, ino_of(dir), name, N4M_TYPE_FILE,
+				sa.set_mode ? sa.mode : 0644, &a);
+		if (!err && how == EXCLUSIVE) {
+			n4m_setattr_req r = { .mask = N4M_SET_ATIME,
+				.atime = vt };
+
+			err = n4m_setattr(s->vol, a.ino, &r, NULL);
+		} else if (!err) {
+			sa.set_uid = sa.set_gid = false;
+			err = apply_sattr(s, &a, &sa);
+		}
+	}
+	if (!err)
+		err = n4m_getattr(s->vol, a.ino, &a);
+	put_create_res(s, out, nfs_errno_to_stat(err), &a, &pre, dir);
+}
+
+static void p_mkdir(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir);
+	char name[NFS_MAXNAME + 1];
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+	struct sattr sa;
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+	int err;
+
+	get_sattr(in, &sa);
+	ARGS_OK(in, out);
+	if (st == NFS3_OK && !name_ok)
+		st = NFS3ERR_INVAL;
+	if (st != NFS3_OK) {
+		put_create_res(s, out, st, NULL, NULL, 0);
+		return;
+	}
+	get_pre(s, dir, &pre);
+	err = n4m_create(s->vol, ino_of(dir), name, N4M_TYPE_DIR, 0755, &a);
+	if (!err && (sa.atime_how || sa.mtime_how)) {
+		sa.set_mode = sa.set_size = false;
+		apply_sattr(s, &a, &sa);
+		n4m_getattr(s->vol, a.ino, &a);
+	}
+	put_create_res(s, out, nfs_errno_to_stat(err), &a, &pre, dir);
+}
+
+static void p_symlink(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir);
+	char name[NFS_MAXNAME + 1], target[NFS_MAXPATH + 1];
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+	bool target_ok;
+	struct sattr sa;
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+	int err;
+
+	get_sattr(in, &sa);
+	target_ok = xdr_get_string(in, target, sizeof(target));
+	ARGS_OK(in, out);
+	if (st == NFS3_OK && (!name_ok || !target_ok))
+		st = NFS3ERR_INVAL;
+	if (st != NFS3_OK) {
+		put_create_res(s, out, st, NULL, NULL, 0);
+		return;
+	}
+	get_pre(s, dir, &pre);
+	err = n4m_symlink(s->vol, ino_of(dir), name, target, &a);
+	put_create_res(s, out, nfs_errno_to_stat(err), &a, &pre, dir);
+}
+
+static void p_mknod(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir);
+	char name[NFS_MAXNAME + 1];
+
+	/* the rest of the arguments do not matter, we do not support it */
+	xdr_get_string(in, name, sizeof(name));
+	xdr_put_u32(out, RPC_SUCCESS);
+	put_create_res(s, out, st == NFS3_OK ? NFS3ERR_NOTSUPP : st, NULL,
+			NULL, st == NFS3_OK ? dir : 0);
+}
+
+static void p_remove(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out, bool isdir)
+{
+	uint64_t dir;
+	uint32_t st = get_fh(s, in, &dir);
+	char name[NFS_MAXNAME + 1];
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+	struct pre_attr pre = { 0 };
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK && !name_ok)
+		st = NFS3ERR_NOENT;
+	if (st == NFS3_OK) {
+		get_pre(s, dir, &pre);
+		st = nfs_errno_to_stat(n4m_remove(s->vol, ino_of(dir), name,
+				isdir));
+	}
+	xdr_put_u32(out, st);
+	put_wcc(s, out, &pre, st == NFS3ERR_BADHANDLE ? 0 : dir);
+}
+
+static void p_rename(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t from, to;
+	char fname[NFS_MAXNAME + 1], tname[NFS_MAXNAME + 1];
+	uint32_t st = get_fh(s, in, &from);
+	bool fok = xdr_get_string(in, fname, sizeof(fname));
+	uint32_t st2 = get_fh(s, in, &to);
+	bool tok = xdr_get_string(in, tname, sizeof(tname));
+	struct pre_attr pf = { 0 }, pt = { 0 };
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = st2;
+	if (st == NFS3_OK && (!fok || !tok))
+		st = NFS3ERR_INVAL;
+	if (st == NFS3_OK) {
+		get_pre(s, from, &pf);
+		get_pre(s, to, &pt);
+		st = nfs_errno_to_stat(n4m_rename(s->vol, ino_of(from), fname,
+				ino_of(to), tname));
+	}
+	xdr_put_u32(out, st);
+	put_wcc(s, out, &pf, from);
+	put_wcc(s, out, &pt, to);
+}
+
+static void p_link(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t file, dir;
+	char name[NFS_MAXNAME + 1];
+	uint32_t st = get_fh(s, in, &file);
+	uint32_t st2 = get_fh(s, in, &dir);
+	bool name_ok = xdr_get_string(in, name, sizeof(name));
+	struct pre_attr pre = { 0 };
+	n4m_attr a;
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = st2;
+	if (st == NFS3_OK && !name_ok)
+		st = NFS3ERR_INVAL;
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, file, &a));
+	if (st == NFS3_OK) {
+		get_pre(s, dir, &pre);
+		st = nfs_errno_to_stat(n4m_link(s->vol, a.ino, ino_of(dir),
+				name, NULL));
+	}
+	xdr_put_u32(out, st);
+	put_post_attr_ref(s, out, file);
+	put_wcc(s, out, &pre, dir);
+}
+
+/* READDIR and READDIRPLUS */
+struct rd_state {
+	struct nfs_server *s;
+	struct xdr_out *out;
+	bool plus;
+	size_t dircount, maxcount;	/* limits from the client */
+	size_t dirused;
+	int entries;
+};
+
+static size_t pad4(size_t n)
+{
+	return (n + 3) & ~(size_t)3;
+}
+
+static int rd_entry(void *ctx, const char *name, size_t namelen,
+		uint64_t ino, int type, uint64_t next_cookie,
+		const n4m_attr *attr)
+{
+	struct rd_state *r = ctx;
+	struct xdr_out *out = r->out;
+	size_t base = 4 + 8 + 4 + pad4(namelen) + 8;
+	size_t need = base + (r->plus ? 4 + 84 + 4 + 4 + NFS_FHSIZE : 0);
+
+	(void)type;
+	/* keep 8 bytes for the end of list marker and eof */
+	if (out->len + need + 8 > r->maxcount ||
+			(r->plus && r->dirused + base > r->dircount))
+		return 1;
+	xdr_put_bool(out, true);
+	xdr_put_u64(out, ino);
+	xdr_put_opaque(out, name, namelen);
+	xdr_put_u64(out, next_cookie);
+	if (r->plus) {
+		put_post_attr(r->s, out, attr);
+		xdr_put_bool(out, attr != NULL);
+		if (attr)
+			nfs_put_fh(r->s, out, attr->ref);
+	}
+	r->dirused += base;
+	r->entries++;
+	return 0;
+}
+
+static void p_readdir(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out, bool plus)
+{
+	uint64_t dir, cookie;
+	uint8_t verf[8];
+	uint32_t dircount, maxcount, st = get_fh(s, in, &dir);
+	struct rd_state r = { 0 };
+	n4m_attr a;
+	size_t start;
+	bool eof = false;
+	int err;
+
+	cookie = xdr_get_u64(in);
+	xdr_get_fixed(in, verf, 8);
+	dircount = xdr_get_u32(in);
+	maxcount = plus ? xdr_get_u32(in) : dircount;
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, dir, &a));
+	if (st == NFS3_OK && a.type != N4M_TYPE_DIR)
+		st = NFS3ERR_NOTDIR;
+	if (st != NFS3_OK) {
+		xdr_put_u32(out, st);
+		put_post_attr(s, out, st == NFS3ERR_NOTDIR ? &a : NULL);
+		return;
+	}
+	if (maxcount > NFS_MAXDATA)
+		maxcount = NFS_MAXDATA;
+	if (dircount > NFS_MAXDATA)
+		dircount = NFS_MAXDATA;
+	start = out->len;
+	xdr_put_u32(out, NFS3_OK);
+	put_post_attr(s, out, &a);
+	memset(verf, 0, sizeof(verf));
+	xdr_put_fixed(out, verf, 8);
+
+	r.s = s;
+	r.out = out;
+	r.plus = plus;
+	r.dircount = dircount;
+	/* maxcount covers the whole reply body, measured from the status */
+	r.maxcount = start + maxcount;
+	err = n4m_readdir(s->vol, ino_of(dir), cookie,
+			N4M_READDIR_HIDE_PROTECTED |
+			(plus ? N4M_READDIR_ATTRS : 0),
+			rd_entry, &r, &eof);
+	if (!err && !r.entries && !eof)
+		err = -1;	/* not even one entry fit */
+	if (err) {
+		out->len = start;
+		xdr_put_u32(out, err == -1 ? NFS3ERR_TOOSMALL :
+				nfs_errno_to_stat(err));
+		put_post_attr(s, out, &a);
+		return;
+	}
+	xdr_put_bool(out, false);	/* no more entries */
+	xdr_put_bool(out, eof);
+}
+
+static void p_fsstat(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+	n4m_volinfo vi;
+
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(n4m_volinfo_get(s->vol, &vi));
+	xdr_put_u32(out, st);
+	put_post_attr_ref(s, out, st == NFS3_OK ? ref : 0);
+	if (st != NFS3_OK)
+		return;
+	xdr_put_u64(out, vi.total_clusters * vi.cluster_size);
+	xdr_put_u64(out, vi.free_clusters * vi.cluster_size);
+	xdr_put_u64(out, vi.free_clusters * vi.cluster_size);
+	xdr_put_u64(out, vi.total_inodes);
+	xdr_put_u64(out, vi.free_inodes);
+	xdr_put_u64(out, vi.free_inodes);
+	xdr_put_u32(out, 0);	/* invarsec */
+}
+
+static void p_fsinfo(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+
+	ARGS_OK(in, out);
+	xdr_put_u32(out, st);
+	put_post_attr_ref(s, out, st == NFS3_OK ? ref : 0);
+	if (st != NFS3_OK)
+		return;
+	xdr_put_u32(out, NFS_MAXDATA);	/* rtmax */
+	xdr_put_u32(out, NFS_MAXDATA);	/* rtpref */
+	xdr_put_u32(out, 4096);		/* rtmult */
+	xdr_put_u32(out, NFS_MAXDATA);	/* wtmax */
+	xdr_put_u32(out, NFS_MAXDATA);	/* wtpref */
+	xdr_put_u32(out, 4096);		/* wtmult */
+	xdr_put_u32(out, 64 * 1024);	/* dtpref */
+	xdr_put_u64(out, 0x7fffffffffffffffULL);
+	xdr_put_u32(out, 0);		/* time_delta: 100ns */
+	xdr_put_u32(out, 100);
+	xdr_put_u32(out, FSF3_LINK | FSF3_SYMLINK | FSF3_HOMOGENEOUS |
+			FSF3_CANSETTIME);
+}
+
+static void p_pathconf(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+
+	ARGS_OK(in, out);
+	xdr_put_u32(out, st);
+	put_post_attr_ref(s, out, st == NFS3_OK ? ref : 0);
+	if (st != NFS3_OK)
+		return;
+	xdr_put_u32(out, 1024);		/* linkmax, NTFS allows 1024 links */
+	xdr_put_u32(out, 255);		/* name_max */
+	xdr_put_bool(out, true);	/* no_trunc */
+	xdr_put_bool(out, true);	/* chown_restricted */
+	xdr_put_bool(out, true);	/* case_insensitive, like Windows */
+	xdr_put_bool(out, true);	/* case_preserving */
+}
+
+static void p_commit(struct nfs_server *s, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	uint64_t ref;
+	uint32_t st = get_fh(s, in, &ref);
+
+	xdr_get_u64(in);	/* offset */
+	xdr_get_u32(in);	/* count */
+	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(n4m_close_write(s->vol, ino_of(ref)));
+	/*
+	 * Data already went to the disk on WRITE. The drive cache is
+	 * flushed by the server loop shortly after (and on unmount), doing
+	 * a full flush per file would make copying many files very slow.
+	 */
+	s->dirty = true;
+	xdr_put_u32(out, st);
+	put_wcc(s, out, NULL, ref);
+	if (st == NFS3_OK)
+		xdr_put_fixed(out, s->writeverf, 8);
+}
+
+void nfs3_dispatch(struct nfs_server *s, uint32_t proc, struct xdr_in *in,
+		struct xdr_out *out)
+{
+	s->requests++;
+	switch (proc) {
+	case 0:	 xdr_put_u32(out, RPC_SUCCESS); break;	/* NULL */
+	case 1:	 p_getattr(s, in, out); break;
+	case 2:	 p_setattr(s, in, out); break;
+	case 3:	 p_lookup(s, in, out); break;
+	case 4:	 p_access(s, in, out); break;
+	case 5:	 p_readlink(s, in, out); break;
+	case 6:	 p_read(s, in, out); break;
+	case 7:	 p_write(s, in, out); break;
+	case 8:	 p_create(s, in, out); break;
+	case 9:	 p_mkdir(s, in, out); break;
+	case 10: p_symlink(s, in, out); break;
+	case 11: p_mknod(s, in, out); break;
+	case 12: p_remove(s, in, out, false); break;
+	case 13: p_remove(s, in, out, true); break;
+	case 14: p_rename(s, in, out); break;
+	case 15: p_link(s, in, out); break;
+	case 16: p_readdir(s, in, out, false); break;
+	case 17: p_readdir(s, in, out, true); break;
+	case 18: p_fsstat(s, in, out); break;
+	case 19: p_fsinfo(s, in, out); break;
+	case 20: p_pathconf(s, in, out); break;
+	case 21: p_commit(s, in, out); break;
+	default: xdr_put_u32(out, RPC_PROC_UNAVAIL); break;
+	}
+}
