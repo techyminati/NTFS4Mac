@@ -27,6 +27,7 @@
 
 #include "daemon.h"
 #include "disk.h"
+#include "n4m.h"
 
 extern char **environ;
 
@@ -370,7 +371,7 @@ int daemon_main(int argc, char **argv)
 	if (test_only[0])
 		dlog("test mode: only handling %s, mounting in %s", test_only,
 			test_dir);
-	dlog("NTFS4Mac auto-mount is running");
+	dlog("%s auto-mount is running", n4m_version_long());
 	dispatch_main();
 }
 

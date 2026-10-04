@@ -366,6 +366,7 @@ int serve_main(const struct serve_opts *o)
 			fchmod(fileno(logf), 0644);
 	}
 	n4m_set_log(engine_log, 1);
+	logmsg("%s, libntfs-3g %s", n4m_version_long(), n4m_ntfs3g_version());
 
 	if (o->bsd[0])
 		snprintf(id, sizeof(id), "%s", o->bsd);
