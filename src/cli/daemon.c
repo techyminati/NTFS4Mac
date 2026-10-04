@@ -13,6 +13,7 @@
 #include <DiskArbitration/DiskArbitration.h>
 #include <dispatch/dispatch.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <spawn.h>
 #include <stdarg.h>
@@ -427,6 +428,69 @@ static int run(char *const argv[])
 	return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
+/* Same as run(), with the command's own output thrown away. */
+static int run_quiet(char *const argv[])
+{
+	posix_spawn_file_actions_t fa;
+	pid_t pid;
+	int status, err;
+
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
+	posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+	err = posix_spawn(&pid, argv[0], &fa, NULL, argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	if (err)
+		return err;
+	if (waitpid(pid, &status, 0) != pid)
+		return errno;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
+static bool daemon_loaded(void)
+{
+	char *argv[] = { "/bin/launchctl", "print", "system/" PLIST_LABEL,
+		NULL };
+
+	return run_quiet(argv) == 0;
+}
+
+/*
+ * launchctl bootout returns before launchd has really let go of the
+ * service, and bootstrapping the same label right away then fails with
+ * "Bootstrap failed: 5: Input/output error". Wait until it is gone.
+ */
+static void stop_daemon(void)
+{
+	char *argv[] = { "/bin/launchctl", "bootout", "system/" PLIST_LABEL,
+		NULL };
+	int i;
+
+	if (!daemon_loaded())
+		return;
+	run_quiet(argv);
+	for (i = 0; i < 100 && daemon_loaded(); i++)
+		usleep(100000);		/* up to 10 seconds */
+}
+
+static int start_daemon(void)
+{
+	char *enable[] = { "/bin/launchctl", "enable", "system/" PLIST_LABEL,
+		NULL };
+	char *boot[] = { "/bin/launchctl", "bootstrap", "system", PLIST_PATH,
+		NULL };
+	int i;
+
+	run_quiet(enable);	/* in case it was disabled at some point */
+	for (i = 0; i < 5; i++) {
+		if (run_quiet(boot) == 0 || daemon_loaded())
+			return 0;
+		usleep(500000);
+	}
+	/* one last time, letting launchctl explain what is wrong */
+	return run(boot) == 0 || daemon_loaded() ? 0 : 1;
+}
+
 static int write_file(const char *path, const char *data, mode_t mode)
 {
 	FILE *f = fopen(path, "w");
@@ -473,26 +537,17 @@ int install_main(void)
 		write_file(SUPPORT_DIR "/ignore", ignore_template, 0644);
 
 	/* replace an older daemon if one is loaded */
-	{
-		char *argv[] = { "/bin/launchctl", "bootout",
-			"system/" PLIST_LABEL, NULL };
-
-		run(argv);
-	}
+	stop_daemon();
 	err = write_file(PLIST_PATH, plist, 0644);
 	if (err) {
 		fprintf(stderr, "ntfs4mac: cannot write %s: %s\n", PLIST_PATH,
 			strerror(err));
 		return 1;
 	}
-	{
-		char *argv[] = { "/bin/launchctl", "bootstrap", "system",
-			PLIST_PATH, NULL };
-
-		if (run(argv)) {
-			fprintf(stderr, "ntfs4mac: launchctl bootstrap failed\n");
-			return 1;
-		}
+	if (start_daemon()) {
+		fprintf(stderr, "ntfs4mac: could not start the auto-mount "
+			"daemon (launchctl bootstrap failed)\n");
+		return 1;
 	}
 	printf("auto-mount is on: NTFS drives now mount read-write when "
 		"plugged in\n");
@@ -502,17 +557,14 @@ int install_main(void)
 
 int uninstall_main(void)
 {
-	char *argv[] = { "/bin/launchctl", "bootout", "system/" PLIST_LABEL,
-		NULL };
+	struct stat st;
+	int rc = 0;
 
 	if (geteuid() != 0) {
 		fprintf(stderr, "run: sudo ntfs4mac uninstall\n");
 		return 1;
 	}
-	struct stat st;
-	int rc = 0;
-
-	run(argv);
+	stop_daemon();
 	/* exactly what install created, nothing else */
 	if (unlink(PLIST_PATH) && errno != ENOENT) {
 		fprintf(stderr, "ntfs4mac: cannot remove %s: %s\n", PLIST_PATH,
