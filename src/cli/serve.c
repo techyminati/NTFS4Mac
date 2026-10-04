@@ -236,7 +236,6 @@ struct state {
 	pid_t mount_pid, umount_pid;
 	uint64_t started_ms, umount_ms, last_check_ms;
 	bool failed;
-	bool forced;
 	bool hibernated;
 };
 
@@ -322,16 +321,19 @@ static bool should_stop(void *ctx)
 			st->umount_pid = 0;
 			if (!still_mounted(st->from, st->mp))
 				return true;
-			logmsg("umount failed, volume busy");
+			logmsg("volume busy, will retry the unmount once the "
+				"open files are closed");
 		}
 		if (!still_mounted(st->from, st->mp))
 			return true;
-		/* busy for 15s after a stop request: force it */
-		if (!st->umount_pid && !st->forced &&
-				now - st->umount_ms > 15000) {
-			st->forced = true;
-			start_umount(st, true);
-		}
+		/*
+		 * Never force it ourselves: a forced NFS unmount drops data
+		 * apps have not written yet. Keep serving and retry a normal
+		 * unmount every few seconds (at shutdown macOS unmounts
+		 * everything itself anyway).
+		 */
+		if (!st->umount_pid && now - st->umount_ms > 5000)
+			start_umount(st, false);
 		return false;
 	default:
 		return true;
