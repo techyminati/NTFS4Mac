@@ -999,73 +999,156 @@ static void p_link(struct nfs_server *s, struct xdr_in *in,
 	put_wcc(s, out, &pre, dir);
 }
 
-/* READDIR and READDIRPLUS */
-struct rd_state {
-	struct nfs_server *s;
-	struct xdr_out *out;
-	bool plus;
-	size_t dircount, maxcount;	/* limits from the client */
-	size_t dirused;
-	int entries;
+/*
+ * READDIR and READDIRPLUS
+ *
+ * NTFS keeps a folder as a B+ tree, so positions inside it move around
+ * when files are added or removed. Handing those positions to the client
+ * as cookies (what ntfs-3g does) can skip or repeat entries when a folder
+ * changes between two pages of a listing. Instead the first page takes a
+ * snapshot of the whole folder and every following page is served from
+ * it: the cookie is simply an index into the snapshot and the cookie
+ * verifier names the snapshot. A new listing always starts a new one.
+ */
+#define SNAP_SLOTS	8
+#define SNAP_MAX_ENTRIES (4u * 1024 * 1024)
+
+struct snap_ent {
+	char *name;
+	uint32_t len;
+	uint64_t ino;
 };
+
+struct snapshot {
+	uint64_t id;		/* the cookie verifier, 0 = free slot */
+	uint64_t dir;		/* MFT reference of the folder */
+	struct snap_ent *ent;
+	size_t count, cap;
+	uint64_t used;		/* for LRU */
+};
+
+static struct snapshot snaps[SNAP_SLOTS];
+static uint64_t snap_clock;
+
+static void snap_free(struct snapshot *sn)
+{
+	size_t i;
+
+	for (i = 0; i < sn->count; i++)
+		free(sn->ent[i].name);
+	free(sn->ent);
+	memset(sn, 0, sizeof(*sn));
+}
+
+static int snap_add(void *ctx, const char *name, size_t namelen,
+		uint64_t ino, int type, uint64_t next_cookie,
+		const n4m_attr *attr)
+{
+	struct snapshot *sn = ctx;
+	struct snap_ent *e;
+
+	(void)type; (void)next_cookie; (void)attr;
+	if (sn->count == SNAP_MAX_ENTRIES)
+		return 1;
+	if (sn->count == sn->cap) {
+		size_t cap = sn->cap ? sn->cap * 2 : 256;
+		struct snap_ent *p = realloc(sn->ent, cap * sizeof(*p));
+
+		if (!p)
+			return 1;
+		sn->ent = p;
+		sn->cap = cap;
+	}
+	e = &sn->ent[sn->count];
+	e->name = malloc(namelen + 1);
+	if (!e->name)
+		return 1;
+	memcpy(e->name, name, namelen);
+	e->name[namelen] = 0;
+	e->len = (uint32_t)namelen;
+	e->ino = ino;
+	sn->count++;
+	return 0;
+}
+
+/* Finds the snapshot for (dir, verifier), or takes a fresh one. */
+static int snap_get(struct nfs_server *s, uint64_t dir, uint64_t cookie,
+		uint64_t verf, struct snapshot **out)
+{
+	struct snapshot *sn = NULL, *lru = &snaps[0];
+	bool eof = false;
+	int i, err;
+
+	if (cookie && verf) {
+		for (i = 0; i < SNAP_SLOTS; i++)
+			if (snaps[i].id == verf && snaps[i].dir == dir) {
+				sn = &snaps[i];
+				break;
+			}
+	}
+	if (!sn) {
+		/* new listing, or an old snapshot we already dropped */
+		for (i = 0; i < SNAP_SLOTS; i++) {
+			if (!snaps[i].id) {
+				lru = &snaps[i];
+				break;
+			}
+			if (snaps[i].used < lru->used)
+				lru = &snaps[i];
+		}
+		snap_free(lru);
+		sn = lru;
+		err = n4m_readdir(s->vol, ino_of(dir), 0,
+				N4M_READDIR_HIDE_PROTECTED, snap_add, sn, &eof);
+		if (err) {
+			snap_free(sn);
+			return err;
+		}
+		if (!eof && sn->count < SNAP_MAX_ENTRIES) {
+			snap_free(sn);
+			return ENOMEM;
+		}
+		sn->dir = dir;
+		do
+			arc4random_buf(&sn->id, sizeof(sn->id));
+		while (!sn->id);
+	}
+	sn->used = ++snap_clock;
+	*out = sn;
+	return 0;
+}
 
 static size_t pad4(size_t n)
 {
 	return (n + 3) & ~(size_t)3;
 }
 
-static int rd_entry(void *ctx, const char *name, size_t namelen,
-		uint64_t ino, int type, uint64_t next_cookie,
-		const n4m_attr *attr)
-{
-	struct rd_state *r = ctx;
-	struct xdr_out *out = r->out;
-	size_t base = 4 + 8 + 4 + pad4(namelen) + 8;
-	size_t need = base + (r->plus ? 4 + 84 + 4 + 4 + NFS_FHSIZE : 0);
-
-	(void)type;
-	/* keep 8 bytes for the end of list marker and eof */
-	if (out->len + need + 8 > r->maxcount ||
-			(r->plus && r->dirused + base > r->dircount))
-		return 1;
-	xdr_put_bool(out, true);
-	xdr_put_u64(out, ino);
-	xdr_put_opaque(out, name, namelen);
-	xdr_put_u64(out, next_cookie);
-	if (r->plus) {
-		put_post_attr(r->s, out, attr);
-		xdr_put_bool(out, attr != NULL);
-		if (attr)
-			nfs_put_fh(r->s, out, attr->ref);
-	}
-	r->dirused += base;
-	r->entries++;
-	return 0;
-}
-
 static void p_readdir(struct nfs_server *s, struct xdr_in *in,
 		struct xdr_out *out, bool plus)
 {
-	uint64_t dir, cookie;
-	uint8_t verf[8];
+	uint64_t dir, cookie, verf;
+	uint8_t vbuf[8];
 	uint32_t dircount, maxcount, st = get_fh(s, in, &dir);
-	struct rd_state r = { 0 };
+	struct snapshot *sn = NULL;
+	size_t start, limit, dirused = 0, i;
 	n4m_attr a;
-	size_t start;
-	bool eof = false, have_a = false;
-	int err;
+	bool have_a = false;
+	int err, entries = 0;
 
 	cookie = xdr_get_u64(in);
-	xdr_get_fixed(in, verf, 8);
+	xdr_get_fixed(in, vbuf, 8);
 	dircount = xdr_get_u32(in);
 	maxcount = plus ? xdr_get_u32(in) : dircount;
 	ARGS_OK(in, out);
+	memcpy(&verf, vbuf, 8);
 	if (st == NFS3_OK) {
 		st = nfs_errno_to_stat(getattr_ref(s, dir, &a));
 		have_a = st == NFS3_OK;
 	}
 	if (have_a && a.type != N4M_TYPE_DIR)
 		st = NFS3ERR_NOTDIR;
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(snap_get(s, dir, cookie, verf, &sn));
 	if (st != NFS3_OK) {
 		xdr_put_u32(out, st);
 		put_post_attr(s, out, have_a ? &a : NULL);
@@ -1076,32 +1159,49 @@ static void p_readdir(struct nfs_server *s, struct xdr_in *in,
 	if (dircount > NFS_MAXDATA)
 		dircount = NFS_MAXDATA;
 	start = out->len;
+	/* maxcount covers the whole reply body, measured from the status */
+	limit = start + maxcount;
 	xdr_put_u32(out, NFS3_OK);
 	put_post_attr(s, out, &a);
-	memset(verf, 0, sizeof(verf));
-	xdr_put_fixed(out, verf, 8);
+	xdr_put_fixed(out, &sn->id, 8);
 
-	r.s = s;
-	r.out = out;
-	r.plus = plus;
-	r.dircount = dircount;
-	/* maxcount covers the whole reply body, measured from the status */
-	r.maxcount = start + maxcount;
-	err = n4m_readdir(s->vol, ino_of(dir), cookie,
-			N4M_READDIR_HIDE_PROTECTED |
-			(plus ? N4M_READDIR_ATTRS : 0),
-			rd_entry, &r, &eof);
-	if (!err && !r.entries && !eof)
-		err = -1;	/* not even one entry fit */
-	if (err) {
+	for (i = (size_t)cookie; i < sn->count; i++) {
+		struct snap_ent *e = &sn->ent[i];
+		size_t base = 4 + 8 + 4 + pad4(e->len) + 8;
+		size_t need = base + (plus ? 4 + 84 + 4 + 4 + NFS_FHSIZE : 0);
+		n4m_attr ea;
+
+		/* keep 8 bytes for the end of list marker and eof */
+		if (out->len + need + 8 > limit ||
+				(plus && dirused + base > dircount))
+			break;
+		if (plus) {
+			err = n4m_getattr(s->vol, e->ino, &ea);
+			if (err == ENOENT || err == ESTALE)
+				continue;	/* deleted since the snapshot */
+		}
+		xdr_put_bool(out, true);
+		xdr_put_u64(out, e->ino);
+		xdr_put_opaque(out, e->name, e->len);
+		xdr_put_u64(out, (uint64_t)i + 1);
+		if (plus) {
+			put_post_attr(s, out, err ? NULL : &ea);
+			xdr_put_bool(out, !err);
+			if (!err)
+				nfs_put_fh(s, out, ea.ref);
+		}
+		dirused += base;
+		entries++;
+	}
+	if (!entries && i < sn->count) {
+		/* not even one entry fit */
 		out->len = start;
-		xdr_put_u32(out, err == -1 ? NFS3ERR_TOOSMALL :
-				nfs_errno_to_stat(err));
+		xdr_put_u32(out, NFS3ERR_TOOSMALL);
 		put_post_attr(s, out, &a);
 		return;
 	}
 	xdr_put_bool(out, false);	/* no more entries */
-	xdr_put_bool(out, eof);
+	xdr_put_bool(out, i >= sn->count);
 }
 
 static void p_fsstat(struct nfs_server *s, struct xdr_in *in,
