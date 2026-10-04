@@ -2,4 +2,6 @@
 -DHAVE_CONFIG_H
 -Ibuild/ntfs-3g/include/ntfs-3g
 -Isrc/core
+-Isrc/nfs
+-Isrc/cli
 -Wall

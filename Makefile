@@ -12,7 +12,8 @@ NTFS3G    = build/ntfs-3g
 ARCHFLAGS = $(foreach a,$(ARCHS),-arch $(a))
 CFLAGS   += $(ARCHFLAGS) -mmacosx-version-min=$(MIN_MACOS) -std=gnu11 -O2 -g \
             -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
-            -DHAVE_CONFIG_H -I$(NTFS3G)/include/ntfs-3g -Isrc/core
+            -DHAVE_CONFIG_H -I$(NTFS3G)/include/ntfs-3g -Isrc/core -Isrc/nfs \
+            -Isrc/cli
 LDFLAGS  += $(ARCHFLAGS) -mmacosx-version-min=$(MIN_MACOS)
 LIBS      = $(NTFS3G)/lib/libntfs-3g.a -framework CoreFoundation
 
@@ -22,16 +23,21 @@ CORE_HDR  = $(wildcard src/core/*.h)
 
 TEST_OBJ  = build/obj/tests/enginetest.o
 
+APP_SRC   = $(wildcard src/nfs/*.c) $(wildcard src/cli/*.c)
+APP_OBJ   = $(patsubst src/%.c,build/obj/%.o,$(APP_SRC))
+APP_HDR   = $(wildcard src/nfs/*.h) $(wildcard src/cli/*.h)
+APP_LIBS  = $(LIBS) -framework DiskArbitration -framework IOKit
+
 .PHONY: all test clean ntfs3g
 
-all: build/libn4m.a build/enginetest
+all: build/libn4m.a build/enginetest build/ntfs4mac
 
 $(NTFS3G)/lib/libntfs-3g.a: $(wildcard patches/ntfs-3g/*.patch)
 	./scripts/build-ntfs3g.sh
 
 ntfs3g: $(NTFS3G)/lib/libntfs-3g.a
 
-build/obj/%.o: src/%.c $(CORE_HDR) | $(NTFS3G)/lib/libntfs-3g.a
+build/obj/%.o: src/%.c $(CORE_HDR) $(APP_HDR) | $(NTFS3G)/lib/libntfs-3g.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -45,6 +51,9 @@ build/libn4m.a: $(CORE_OBJ)
 
 build/enginetest: $(TEST_OBJ) build/libn4m.a $(NTFS3G)/lib/libntfs-3g.a
 	$(CC) $(LDFLAGS) -o $@ $(TEST_OBJ) build/libn4m.a $(LIBS)
+
+build/ntfs4mac: $(APP_OBJ) build/libn4m.a $(NTFS3G)/lib/libntfs-3g.a
+	$(CC) $(LDFLAGS) -o $@ $(APP_OBJ) build/libn4m.a $(APP_LIBS)
 
 test: all
 	./tests/run.sh
