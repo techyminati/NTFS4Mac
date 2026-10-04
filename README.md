@@ -36,12 +36,14 @@ That's it.
 
 **It showed up but I can't write to it.** Windows didn't fully shut down last time it used the drive. Windows 10 and 11 have "Fast Startup" on by default, which hibernates instead of shutting down, and writing to a drive in that state can destroy data. So NTFS4Mac plays it safe and mounts it read only. Fix: plug it into the Windows PC, hold **Shift** while clicking **Shut down**, then try again on the Mac. (Turning off Fast Startup in Windows' Power Options fixes it for good.)
 
-**Is it safe?** NTFS4Mac uses the same NTFS engine Linux has relied on for over 15 years, refuses to write to drives Windows left in a risky state, and is tested hard. But it's a new project, so for now keep backups of anything irreplaceable, and always eject before unplugging.
+**Unplugged without ejecting?** Then the drive shows up read only next time, on purpose: NTFS4Mac marks a drive "in use" while it's mounted, just like Windows does. Plug it into Windows once, Windows checks it automatically, and it's writable on the Mac again.
+
+**Is it safe?** NTFS4Mac uses the same NTFS engine Linux has relied on for over 15 years, never writes to a drive Windows left in a risky state, and makes sure only one program writes to a drive at a time. It's also tested hard. But it's a new project, so for now keep backups of anything irreplaceable, and always eject before unplugging.
 
 **Things that work a bit differently:**
 - Deleting files on the drive is immediate (there's no Trash on it).
 - Finder tags and colors work and are stored invisibly inside the files, so Windows never sees extra `._` files.
-- A few special Windows files (compressed by Windows' CompactOS, or encrypted with EFS) can't be opened yet. You get an error, never broken data.
+- A few special Windows files (OneDrive "online only" files, files compressed by Windows' CompactOS, or encrypted with EFS) can't be opened. You get an error, never broken data.
 
 **Want macOS to leave a drive alone?** Add its name to `/Library/Application Support/NTFS4Mac/ignore`.
 
