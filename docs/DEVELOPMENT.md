@@ -33,12 +33,16 @@ For real drives: use a spare one first, then check it on Windows with `chkdsk X:
 
 GitHub Actions (`.github/workflows/build.yml`) builds and tests every push and pull request. To publish a release:
 
-1. bump `N4M_VERSION` in `src/core/n4m.h` and commit
+1. bump the `VERSION` file and commit
 2. tag and push: `git tag v0.1.0 && git push k v0.1.0` (use your remote's name)
 
-The workflow checks the tag matches `N4M_VERSION`, builds the universal binary, runs the tests and publishes a GitHub release with `ntfs4mac-macos.tar.gz` and its `.sha256`. `install.sh` always tries the latest release first, so users don't need Xcode. `make dist` builds the same tarball locally. It carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
+The workflow checks the tag matches `VERSION`, builds the universal binary, runs the tests and publishes a GitHub release with `ntfs4mac-macos.tar.gz` and its `.sha256`. `install.sh` always tries the latest release first, so users don't need Xcode. `make dist` builds the same tarball locally. It carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
 
 The repository has to be public for `install.sh` to download releases without logging in.
+
+## Versions
+
+`VERSION` holds the release number. The build stamps it into the binary together with `git describe` (for example `v0.1.0`, `v0.1.0-3-gabc1234` for later commits, `-dirty` with uncommitted changes) and the commit date. `ntfs4mac version` shows it, and every mount writes it to the log, so a log always says which build produced it. `ntfs4mac about` shows the developers, license and credits.
 
 ## License
 
