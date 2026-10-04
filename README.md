@@ -20,7 +20,7 @@ Open **Terminal** and paste this:
 curl -fsSL https://raw.githubusercontent.com/techyminati/NTFS4Mac/main/install.sh | bash
 ```
 
-It asks for your Mac password once, to set up plug and play. That's the whole install, no restart needed.
+It first shows a short disclaimer and the license, and only installs once you type `yes`. Then it asks for your Mac password once, to set up plug and play. That's the whole install, no restart needed.
 
 Works on macOS 15.4 or newer, on Apple Silicon and Intel Macs.
 
@@ -59,6 +59,10 @@ sudo ntfs4mac uninstall
 - [How it works](docs/HOW-IT-WORKS.md): the technical side, what's supported, limitations, roadmap
 - [Troubleshooting](docs/TROUBLESHOOTING.md): when something doesn't work
 - [Building and development](docs/DEVELOPMENT.md): build from source, run the tests, make releases
+
+## Developers
+
+- **Aryan Sinha** ([@techyminati](https://github.com/techyminati))
 
 ## Credits
 
