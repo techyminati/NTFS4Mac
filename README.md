@@ -11,7 +11,7 @@ $ sudo ntfs4mac mount disk4s1
 Mounted read-write at /Volumes/Backup 2019
 ```
 
-That's it. The drive shows up in Finder and you can copy, paste, rename and delete like on any other disk.
+That's it. The drive shows up in Finder and you can copy, paste, rename and delete like on any other disk. Run `sudo ntfs4mac install` once and you don't even need that: NTFS drives mount read-write by themselves when you plug them in.
 
 ## Why I built this
 
@@ -26,6 +26,8 @@ So NTFS4Mac was born: full NTFS read-write that works on a stock, fully secured 
 ## What it does
 
 - Mounts NTFS partitions **read-write**, Finder copy/paste/rename/delete all work
+- **Plug and play**: optional auto-mount, drives come up read-write as soon as you plug them in, and ejecting in Finder closes the volume cleanly and ejects the drive
+- Finder tags, colors and other Mac metadata are kept **inside** the NTFS file (an alternate data stream), so no `._` files litter your drives and Windows never sees them
 - Works on Apple Silicon and Intel, macOS 15.4 and newer (built and tested on macOS 26)
 - Nothing to install into the system: no kext, no macFUSE, SIP stays on
 - Uses **libntfs-3g** for the on-disk work, the same NTFS engine Linux distros have trusted for over 15 years
@@ -108,6 +110,24 @@ sudo ntfs4mac mount disk4s1 --foreground       # stay in the terminal with logs
 
 Logs go to `/var/log/ntfs4mac.log`.
 
+### Auto-mount (plug and play)
+
+```sh
+sudo ntfs4mac install
+```
+
+This copies `ntfs4mac` to `/usr/local/bin` and adds a small LaunchDaemon (`/Library/LaunchDaemons/com.ntfs4mac.automount.plist`). From then on, whenever macOS is about to mount an NTFS drive read only, NTFS4Mac steps in and mounts it read-write instead. If that ever fails, macOS gets to mount it read only as usual, so a drive never just goes missing. Drives that were already plugged in get picked up too.
+
+Ejecting in Finder closes the volume cleanly and ejects the drive, so once it disappears from Finder you can unplug it.
+
+Want macOS to keep handling some drive? Put its name or volume UUID in `/Library/Application Support/NTFS4Mac/ignore`, one per line.
+
+To turn it off again:
+
+```sh
+sudo ntfs4mac uninstall
+```
+
 ### "It mounted read-only, why?"
 
 Windows didn't fully shut down. Windows 10 and 11 have **Fast Startup** turned on by default, which hibernates instead of shutting down, and writing to a hibernated NTFS drive can destroy data. Best fix: boot Windows, then shut down while holding Shift (or turn Fast Startup off in Power Options). If you know you don't need that Windows session, `--remove-hiberfile` deletes the hibernation file and mounts read-write anyway.
@@ -117,6 +137,7 @@ Windows didn't fully shut down. Windows 10 and 11 have **Fast Startup** turned o
 Please test before trusting it with the only copy of anything.
 
 1. **`make test`** creates throwaway NTFS images and hammers them: creating, writing, reading back, renames of every kind (including case-only renames and replacing existing files), hard links, symlinks, Unicode and Windows-illegal names, truncating, timestamps, listing a 700 file folder page by page, a 64 MB file, remounting to make sure everything stuck, and finally checks the image with the independent `ntfsfix`, `ntfsls` and `ntfscat` tools.
+   `tests/automount-test.sh` does the same for auto-mount: it builds a disk image that looks like a Windows USB stick, "plugs it in" with the daemon running in a test mode that only touches that image, writes to it, ejects it, and checks the drive gets taken over when it was already mounted.
 2. **Then a spare drive.** Use a USB stick formatted as NTFS on Windows, or a drive whose data is backed up. Mount it, copy things on and off, rename, delete, eject.
 3. **Then back on Windows.** Open the files, and run `chkdsk X:` to confirm the file system is clean.
 
@@ -125,16 +146,15 @@ Please test before trusting it with the only copy of anything.
 NTFS4Mac is young. These are the current rough edges:
 
 - The volume shows up in Finder like a network volume. Deleting is immediate (no Trash) and Spotlight doesn't index it.
-- macOS extended attributes (Finder tags, "downloaded from the internet" flags) are stored as hidden `._name` files for now. Windows hides them. Storing them inside NTFS streams is on the list.
 - Files compressed with Windows **CompactOS / WOF** or **Data Deduplication** can't be read yet. You get an error, never garbage data. Regular NTFS compression works fine.
 - EFS encrypted files can't be read (the keys live in Windows).
 - Unix permissions (`chmod`) are mostly ignored, only the write bit is kept (as the Windows read-only attribute).
-- No auto-mount on plug in yet, you run `ntfs4mac mount` yourself.
+- Mac metadata written while a file is being created by some app before the file itself exists still ends up as a real (hidden on Windows) `._name` file. That's rare.
 
 ## Roadmap
 
-- [ ] Auto-mount NTFS drives read-write when they're plugged in (LaunchDaemon)
-- [ ] Extended attributes stored in NTFS alternate data streams (no more `._` files)
+- [x] Auto-mount NTFS drives read-write when they're plugged in (LaunchDaemon)
+- [x] Mac metadata stored in NTFS alternate data streams (no `._` files)
 - [ ] Native FSKit driver (real local volume: Trash, Spotlight, Disk Utility)
 - [ ] Reading Windows CompactOS (WOF) compressed files
 - [ ] `chmod` support using WSL style permission metadata
@@ -145,7 +165,7 @@ NTFS4Mac is young. These are the current rough edges:
 ```
 src/core/        the NTFS engine, a thread safe API over libntfs-3g
 src/nfs/         local NFSv3 + MOUNT server (RFC 1813)
-src/cli/         the ntfs4mac command, DiskArbitration helpers
+src/cli/         the ntfs4mac command, auto-mount daemon, DiskArbitration helpers
 tests/           engine test suite and runner
 vendor/ntfs-3g/  upstream ntfs-3g (git submodule, untouched)
 patches/ntfs-3g/ small fixes we apply on top of upstream at build time
