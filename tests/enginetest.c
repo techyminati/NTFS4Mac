@@ -407,6 +407,42 @@ int main(int argc, char **argv)
 		CHECK(l->count == 350, "350 left, got %d", l->count);
 	}
 
+	section("alternate data streams");
+	{
+		const char *ad = N4M_APPLEDOUBLE_STREAM;
+		uint64_t sf = mk(ROOT, "streams.txt", N4M_TYPE_FILE);
+		uint64_t sz = 0;
+		char sbuf[64];
+
+		put(sf, 0, "main data", 9);
+		ERR(n4m_stream_size(vol, sf, ad, &sz), ENOENT);
+		OK(n4m_stream_write(vol, sf, ad, 0, 11, "mac metdata", &n));
+		CHECK(n == 11, "stream write %zu", n);
+		OK(n4m_stream_write(vol, sf, ad, 6, 5, "adata", &n));
+		OK(n4m_stream_size(vol, sf, ad, &sz));
+		CHECK(sz == 11, "stream size %llu", (unsigned long long)sz);
+		OK(n4m_stream_read(vol, sf, ad, 0, sizeof(sbuf), sbuf, &n));
+		CHECK(n == 11 && !memcmp(sbuf, "mac meadata", 11),
+			"stream content '%.*s'", (int)n, sbuf);
+		CHECK(same_data(sf, 0, "main data", 9), "main data untouched");
+		OK(n4m_getattr(vol, sf, &a));
+		CHECK(a.size == 9, "file size ignores streams");
+		OK(n4m_rename(vol, ROOT, "streams.txt", d, "moved.txt"));
+		OK(n4m_stream_size(vol, sf, ad, &sz));
+		CHECK(sz == 11, "stream moved with the file");
+		OK(n4m_stream_truncate(vol, sf, ad, 3));
+		OK(n4m_stream_size(vol, sf, ad, &sz));
+		CHECK(sz == 3, "stream truncated");
+		OK(n4m_stream_write(vol, d, ad, 0, 4, "dir!", &n));
+		OK(n4m_stream_size(vol, d, ad, &sz));
+		CHECK(sz == 4, "stream on a folder");
+		OK(n4m_stream_remove(vol, d, ad));
+		ERR(n4m_stream_size(vol, d, ad, &sz), ENOENT);
+		ERR(n4m_stream_remove(vol, d, ad), ENOENT);
+		list_dir(d, l, 0);
+		CHECK(listed(l, "moved.txt"), "file listed once");
+	}
+
 	section("64 MiB file");
 	{
 		uint64_t g = mk(ROOT, "big.bin", N4M_TYPE_FILE);
