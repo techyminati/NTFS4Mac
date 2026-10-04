@@ -16,7 +16,7 @@ make test     # runs the test suite against throwaway NTFS images
 
 The result is `build/ntfs4mac`, a universal (Apple Silicon + Intel) binary. `./install.sh` from inside the checkout builds it and sets up plug and play, or run `sudo build/ntfs4mac install` yourself.
 
-`install.sh` shows the disclaimer and the CipherOS License 2.0 and stops unless you type `yes`. For unattended installs set `NTFS4MAC_ACCEPT_LICENSE=yes`. `NTFS4MAC_SKIP_SETUP=1` does everything except the final `sudo ntfs4mac install` (handy for testing the installer).
+`install.sh` shows the disclaimer and the CipherOS License 2.0 and stops unless you type `yes`, then installs the latest release (building from source only when there is none). For unattended installs set `NTFS4MAC_ACCEPT_LICENSE=yes`. `NTFS4MAC_FROM_SOURCE=1` always builds instead of downloading (`make install` does that), and `NTFS4MAC_SKIP_SETUP=1` does everything except the final `sudo ntfs4mac install` (handy for testing the installer).
 
 ## Tests
 
@@ -31,11 +31,14 @@ For real drives: use a spare one first, then check it on Windows with `chkdsk X:
 
 ## Releases
 
-```sh
-make dist
-```
+GitHub Actions (`.github/workflows/build.yml`) builds and tests every push and pull request. To publish a release:
 
-creates `dist/ntfs4mac-macos.tar.gz` and its `.sha256`. Upload both to a GitHub release, `install.sh` downloads them from the latest release so users don't need Xcode. The tarball carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
+1. bump `N4M_VERSION` in `src/core/n4m.h` and commit
+2. tag and push: `git tag v0.1.0 && git push k v0.1.0` (use your remote's name)
+
+The workflow checks the tag matches `N4M_VERSION`, builds the universal binary, runs the tests and publishes a GitHub release with `ntfs4mac-macos.tar.gz` and its `.sha256`. `install.sh` always tries the latest release first, so users don't need Xcode. `make dist` builds the same tarball locally. It carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
+
+The repository has to be public for `install.sh` to download releases without logging in.
 
 ## License
 
