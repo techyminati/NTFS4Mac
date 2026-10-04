@@ -442,6 +442,7 @@ struct rd_entry {
 	u64 mref;
 	unsigned dt;
 	s64 pos;
+	bool maybe_protected;
 };
 
 struct rd_ctx {
@@ -502,17 +503,15 @@ static int rd_filler(void *dirent, const ntfschar *name, const int name_len,
 	}
 	if (rd->err)
 		return -1;
-	if (!dot && rd->is_root && (rd->flags & N4M_READDIR_HIDE_PROTECTED) &&
-			is_protected(s)) {
-		free(s);
-		return 0;
-	}
 	e = &rd->ent[rd->count++];
 	e->name = s;
 	e->len = len;
 	e->mref = mref;
 	e->dt = dt_type;
 	e->pos = pos;
+	/* checked once the folder is closed, see n4m_readdir */
+	e->maybe_protected = !dot && rd->is_root &&
+		(rd->flags & N4M_READDIR_HIDE_PROTECTED) && is_protected(s);
 	return 0;
 }
 
@@ -573,6 +572,23 @@ int n4m_readdir(n4m_volume *v, uint64_t dir, uint64_t cookie, int flags,
 			n4m_attr attr, *ap = NULL;
 			int type = dt_to_type(e->dt);
 			int r;
+
+			/* hide Windows' own system folders, not user files */
+			if (e->maybe_protected) {
+				int ierr = 0;
+				bool hide = false;
+
+				ni = n4m_iopen(v, MREF(e->mref), &ierr);
+				if (ni) {
+					hide = (ni->flags & FILE_ATTR_HIDDEN) &&
+						(ni->flags & FILE_ATTR_SYSTEM);
+					ntfs_inode_close(ni);
+				}
+				if (hide) {
+					cookie = (uint64_t)e->pos + 1;
+					continue;
+				}
+			}
 
 			if (!type || (flags & N4M_READDIR_ATTRS)) {
 				int ierr = 0;
@@ -666,6 +682,13 @@ int n4m_setattr(n4m_volume *v, uint64_t ino, const n4m_setattr_req *sa,
 		goto out;
 	isdir = (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY) != 0;
 
+	if ((sa->mask & N4M_SET_SIZE) && !isdir &&
+			(ni->flags & FILE_ATTR_REPARSE_POINT) &&
+			n4m_classify(ni, NULL) != N4M_TYPE_SYMLINK) {
+		/* cloud placeholders, compressed system files... */
+		err = ENOTSUP;
+		goto close;
+	}
 	if ((sa->mask & N4M_SET_SIZE) && !isdir &&
 			!(ni->flags & FILE_ATTR_REPARSE_POINT)) {
 		if ((uint64_t)ni->data_size != sa->size) {
