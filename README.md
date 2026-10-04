@@ -4,11 +4,15 @@
 
 Free and open source. No kernel extensions, no macFUSE, nothing to disable in your Mac's security settings.
 
+> **NTFS4Mac is free software.** If you paid for it, you were scammed. Get your money back and report the seller.
+
 ## Why I built this
 
 I have a lot of drives formatted as NTFS. Old backups, external disks I share with my Windows PC, random big drives full of stuff. macOS can read NTFS, but it can't write to it. So every time I plugged one in, I had two choices: copy everything off and reformat the drive for the Mac, or live with it being read only.
 
 I really didn't want to reformat all of them just to use them on a Mac. Some still go back and forth to Windows, and some are just too big to shuffle around. The paid NTFS drivers want money again every few macOS releases, and the free ones usually mean lowering your Mac's security so a kernel extension can load. I didn't want either.
+
+And let's be honest about the real reason this exists: Apple's engineers have been too lazy to add NTFS writing in the more than 20 years macOS has been able to read it. Someone had to do it.
 
 So I built NTFS4Mac: full NTFS read and write on a normal, fully secured Mac.
 
