@@ -5,7 +5,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/vendor/ntfs-3g"
-WORK="$ROOT/build/ntfs-3g-src"
+# Deliberately three levels below the repo: without an explicit aux dir,
+# autoconf looks for "install.sh" in ../.. and would take our installer.
+WORK="$ROOT/build/src/ntfs-3g"
 PREFIX="$ROOT/build/ntfs-3g"
 ARCHS="${ARCHS:-arm64 x86_64}"
 MIN_MACOS="${MIN_MACOS:-15.4}"
@@ -38,7 +40,11 @@ for p in "$ROOT"/patches/ntfs-3g/*.patch; do
 done
 
 cd "$WORK"
-autoreconf --install --force >/dev/null 2>&1
+if ! autoreconf --install --force >"$WORK/autoreconf.log" 2>&1; then
+	tail -20 "$WORK/autoreconf.log" >&2
+	echo "autoreconf failed" >&2
+	exit 1
+fi
 
 export CFLAGS="$ARCH_FLAGS -mmacosx-version-min=$MIN_MACOS -O2 -g"
 export LDFLAGS="$ARCH_FLAGS -mmacosx-version-min=$MIN_MACOS"
