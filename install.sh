@@ -4,15 +4,16 @@
 #   curl -fsSL https://raw.githubusercontent.com/techyminati/NTFS4Mac/main/install.sh | bash
 #
 # Shows the disclaimer and the CipherOS License 2.0 and only continues when
-# you accept them. Then it gets ntfs4mac (the latest prebuilt release, or
-# builds it from source when there is none) and runs "sudo ntfs4mac
-# install" to turn on plug and play. Run it from inside a source checkout
-# to install what you built yourself.
+# you accept them. Then it downloads the latest prebuilt release (built by
+# GitHub Actions), and only when there is none it builds from source: from
+# the checkout it was started in, or from a fresh clone. Finally it runs
+# "sudo ntfs4mac install" to turn on plug and play.
 #
 # Everything is downloaded and built in a fresh temporary folder, and that
 # folder is the only thing this script ever deletes.
 #
 # Non-interactive installs: NTFS4MAC_ACCEPT_LICENSE=yes accepts the terms.
+# NTFS4MAC_FROM_SOURCE=1 skips the release and builds (make install uses it).
 set -euo pipefail
 
 REPO="${NTFS4MAC_REPO:-techyminati/NTFS4Mac}"
@@ -134,21 +135,39 @@ build_from() {	# build_from <source dir>
 	BIN="$1/build/ntfs4mac"
 }
 
+# 1. the latest release
 BIN=""
-if [ -n "$SRC_HERE" ]; then
-	info "installing from the source in $SRC_HERE"
-	build_from "$SRC_HERE"
-else
+if [ "${NTFS4MAC_FROM_SOURCE:-0}" != 1 ]; then
+	if [ -z "${NTFS4MAC_RELEASE_URL:-}" ]; then
+		tag="$(curl -fsSL --max-time 15 \
+			"https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+			sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1 || true)"
+	else
+		tag=""
+	fi
 	url="${NTFS4MAC_RELEASE_URL:-https://github.com/$REPO/releases/latest/download}/$ASSET"
-	info "downloading the latest release"
+	info "downloading the latest release${tag:+ ($tag)}"
 	if curl -fsSL -o "$WORK/$ASSET" "$url" &&
 			curl -fsSL -o "$WORK/$ASSET.sha256" "$url.sha256"; then
 		(cd "$WORK" && shasum -a 256 -c "$ASSET.sha256" >/dev/null) ||
 			die "the download is damaged (checksum mismatch), please try again"
 		tar -xzf "$WORK/$ASSET" -C "$WORK"
 		BIN="$WORK/ntfs4mac/ntfs4mac"
+		if ! "$BIN" version >/dev/null 2>&1; then
+			info "the release does not run on this Mac, building instead"
+			BIN=""
+		fi
 	else
-		info "no release found, building from source instead"
+		info "no release available, building from source instead"
+	fi
+fi
+
+# 2. build from source
+if [ -z "$BIN" ]; then
+	if [ -n "$SRC_HERE" ]; then
+		info "building the source in $SRC_HERE"
+		build_from "$SRC_HERE"
+	else
 		command -v git >/dev/null || die "git is needed to get the source"
 		git clone --quiet --depth 1 --recursive \
 			"https://github.com/$REPO.git" "$WORK/src" ||
