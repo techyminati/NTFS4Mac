@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "daemon.h"
 #include "disk.h"
 #include "n4m.h"
 #include "serve.h"
@@ -35,6 +36,8 @@ static void usage(void)
 "  sudo ntfs4mac mount <disk> [folder]   mount read-write (eg. disk4s1)\n"
 "  sudo ntfs4mac unmount <disk|folder>   unmount safely\n"
 "  ntfs4mac info <disk|image>            details about a volume\n"
+"  sudo ntfs4mac install                 auto-mount NTFS drives read-write\n"
+"  sudo ntfs4mac uninstall               turn auto-mount off\n"
 "\n"
 "mount options:\n"
 "  --read-only          mount without write access\n"
@@ -193,6 +196,8 @@ static int cmd_mount(int argc, char **argv)
 			o.readonly = true;
 		else if (!strcmp(argv[i], "--remove-hiberfile"))
 			o.remove_hiberfile = true;
+		else if (!strcmp(argv[i], "--eject-on-unmount"))
+			o.eject_on_unmount = true;
 		else if (!strcmp(argv[i], "--foreground") ||
 				!strcmp(argv[i], "-f"))
 			foreground = true;
@@ -303,6 +308,8 @@ static int cmd_mount(int argc, char **argv)
 			args[n++] = "--read-only";
 		if (o.remove_hiberfile)
 			args[n++] = "--remove-hiberfile";
+		if (o.eject_on_unmount)
+			args[n++] = "--eject-on-unmount";
 		args[n] = NULL;
 
 		posix_spawnattr_init(&attr);
@@ -375,6 +382,8 @@ static int cmd_serve(int argc, char **argv)
 			o.readonly = true;
 		else if (!strcmp(a, "--remove-hiberfile"))
 			o.remove_hiberfile = true;
+		else if (!strcmp(a, "--eject-on-unmount"))
+			o.eject_on_unmount = true;
 	}
 	return serve_main(&o);
 }
@@ -455,6 +464,12 @@ int main(int argc, char **argv)
 		return cmd_info(argv[2]);
 	if (!strcmp(argv[1], "__serve"))
 		return cmd_serve(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "daemon"))
+		return daemon_main(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "install"))
+		return install_main();
+	if (!strcmp(argv[1], "uninstall"))
+		return uninstall_main();
 	if (!strcmp(argv[1], "version") || !strcmp(argv[1], "--version")) {
 		printf("NTFS4Mac %s\n", N4M_VERSION);
 		return 0;

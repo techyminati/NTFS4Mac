@@ -14,6 +14,7 @@ struct serve_opts {
 	char mountpoint[1024];	/* empty: /Volumes/<label> */
 	bool readonly;
 	bool remove_hiberfile;
+	bool eject_on_unmount;	/* eject the drive after a normal unmount */
 	uid_t uid;
 	gid_t gid;
 	int status_fd;		/* readiness pipe, -1 when in foreground */

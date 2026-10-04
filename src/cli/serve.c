@@ -162,6 +162,38 @@ static pid_t spawn(char *const argv[])
 	return pid;
 }
 
+/*
+ * After the user ejected our volume in Finder, eject the whole drive too so
+ * it is gone from Disk Utility and can be unplugged. Only when no other
+ * partition of that drive is still mounted.
+ */
+static void eject_if_idle(const char *bsd)
+{
+	char whole[64], dev[80], ours[96];
+	struct statfs *mnt;
+	size_t wl;
+	int n, i, err;
+
+	snprintf(whole, sizeof(whole), "%s", bsd);
+	whole[strcspn(whole + 4, "s") + 4] = 0;	/* disk4s1 -> disk4 */
+	snprintf(dev, sizeof(dev), "/dev/%ss", whole);
+	snprintf(ours, sizeof(ours), "127.0.0.1:/ntfs4mac/%ss", whole);
+	wl = strlen(dev);
+	n = getmntinfo(&mnt, MNT_NOWAIT);
+	for (i = 0; i < n; i++) {
+		if (!strncmp(mnt[i].f_mntfromname, dev, wl) ||
+				!strncmp(mnt[i].f_mntfromname, ours,
+				strlen(ours))) {
+			logmsg("not ejecting %s, %s is still mounted", whole,
+				mnt[i].f_mntonname);
+			return;
+		}
+	}
+	err = disk_eject(bsd);
+	logmsg(err ? "could not eject %s: %s" : "ejected %s%s", whole,
+		err ? strerror(err) : "");
+}
+
 enum phase { MOUNTING, MOUNTED, UNMOUNTING, DONE };
 
 struct state {
@@ -419,6 +451,8 @@ out:
 	}
 	if (made_dir && !is_mountpoint(st.mp))
 		rmdir(st.mp);
+	if (rc == 0 && vol && o->eject_on_unmount && o->bsd[0])
+		eject_if_idle(o->bsd);
 	if (st.status_fd >= 0)
 		close(st.status_fd);
 	if (logf)
