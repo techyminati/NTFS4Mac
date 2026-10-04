@@ -16,6 +16,8 @@ make test     # runs the test suite against throwaway NTFS images
 
 The result is `build/ntfs4mac`, a universal (Apple Silicon + Intel) binary. `./install.sh` from inside the checkout builds it and sets up plug and play, or run `sudo build/ntfs4mac install` yourself.
 
+`install.sh` shows the disclaimer and the CipherOS License 2.0 and stops unless you type `yes`. For unattended installs set `NTFS4MAC_ACCEPT_LICENSE=yes`. `NTFS4MAC_SKIP_SETUP=1` does everything except the final `sudo ntfs4mac install` (handy for testing the installer).
+
 ## Tests
 
 Please test changes before trusting them with real data.
@@ -33,7 +35,11 @@ For real drives: use a spare one first, then check it on Windows with `chkdsk X:
 make dist
 ```
 
-creates `dist/ntfs4mac-macos.tar.gz` and its `.sha256`. Upload both to a GitHub release, `install.sh` downloads them from the latest release so users don't need Xcode.
+creates `dist/ntfs4mac-macos.tar.gz` and its `.sha256`. Upload both to a GitHub release, `install.sh` downloads them from the latest release so users don't need Xcode. The tarball carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
+
+## License
+
+NTFS4Mac's own code is under the CipherOS License 2.0 (see `LICENSE`): free for personal use, evaluation, testing, research and study, commercial or third party use only with written permission. ntfs-3g in `vendor/ntfs-3g` and the patches to it in `patches/ntfs-3g` stay under ntfs-3g's own license.
 
 ## Project layout
 
