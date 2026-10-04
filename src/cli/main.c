@@ -43,6 +43,8 @@ static void usage(void)
 "  --read-only          mount without write access\n"
 "  --remove-hiberfile   delete hiberfil.sys left by Windows Fast Startup\n"
 "                       (anything unsaved in that Windows session is lost)\n"
+"  --reset-journal      mount read-write even though Windows did not close\n"
+"                       the drive cleanly (better: let Windows check it)\n"
 "  --foreground         stay in the terminal, log to stderr\n"
 "\n"
 "unmount options:\n"
@@ -198,6 +200,8 @@ static int cmd_mount(int argc, char **argv)
 			o.remove_hiberfile = true;
 		else if (!strcmp(argv[i], "--eject-on-unmount"))
 			o.eject_on_unmount = true;
+		else if (!strcmp(argv[i], "--reset-journal"))
+			o.reset_journal = true;
 		else if (!strcmp(argv[i], "--foreground") ||
 				!strcmp(argv[i], "-f"))
 			foreground = true;
@@ -310,6 +314,8 @@ static int cmd_mount(int argc, char **argv)
 			args[n++] = "--remove-hiberfile";
 		if (o.eject_on_unmount)
 			args[n++] = "--eject-on-unmount";
+		if (o.reset_journal)
+			args[n++] = "--reset-journal";
 		args[n] = NULL;
 
 		posix_spawnattr_init(&attr);
@@ -360,8 +366,11 @@ static int cmd_mount(int argc, char **argv)
 					"down), or turn off Fast Startup.\n");
 			else if (!strncmp(buf, "RO-UNCLEAN", 10))
 				printf("Windows did not close this drive "
-					"cleanly. Run chkdsk on it in Windows, "
-					"then try again.\n");
+					"cleanly (crash or unplugged while in "
+					"use).\nPlug it into Windows and let it "
+					"check the drive (chkdsk X: /f), then try "
+					"again.\nIf you can't, --reset-journal "
+					"mounts it read-write anyway (riskier).\n");
 			return 0;
 		}
 		fprintf(stderr, "ntfs4mac: %s\n", !strncmp(buf, "ERR ", 4) ?
@@ -400,6 +409,8 @@ static int cmd_serve(int argc, char **argv)
 			o.remove_hiberfile = true;
 		else if (!strcmp(a, "--eject-on-unmount"))
 			o.eject_on_unmount = true;
+		else if (!strcmp(a, "--reset-journal"))
+			o.reset_journal = true;
 	}
 	return serve_main(&o);
 }

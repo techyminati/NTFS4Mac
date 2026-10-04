@@ -368,6 +368,7 @@ int serve_main(const struct serve_opts *o)
 	}
 	mo.readonly = o->readonly;
 	mo.remove_hiberfile = o->remove_hiberfile;
+	mo.reset_journal = o->reset_journal;
 	mo.uid = o->uid;
 	mo.gid = o->gid;
 	err = n4m_mount(&dev, &mo, &vol);

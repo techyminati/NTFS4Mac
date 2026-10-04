@@ -57,6 +57,13 @@ typedef struct n4m_mount_opts {
 	 * session) and mounts read-write.
 	 */
 	bool remove_hiberfile;
+	/*
+	 * When Windows crashed or the drive was unplugged, NTFS's journal
+	 * still holds unfinished changes and we mount read only. Setting this
+	 * throws the journal away and mounts read-write anyway (what ntfs-3g
+	 * does by default). Letting Windows repair the drive is safer.
+	 */
+	bool reset_journal;
 	/* Owner reported for every file. */
 	uid_t uid;
 	gid_t gid;

@@ -56,7 +56,7 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 {
 	struct n4m_volume *v;
 	struct ntfs_device *dev;
-	ntfs_mount_flags flags = NTFS_MNT_RECOVER;
+	ntfs_mount_flags flags = 0;
 	int err;
 
 	n4m_log_init();
@@ -69,12 +69,21 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 	v->uid = opts->uid;
 	v->gid = opts->gid;
 
-	if (opts->readonly || bdev->readonly)
+	/*
+	 * Unlike ntfs-3g we do not wipe a dirty journal by default. A dirty
+	 * $LogFile means Windows crashed or the drive was pulled with changes
+	 * in flight; only Windows can replay those, so we mount read only and
+	 * ask the user to let Windows fix it (or to override explicitly).
+	 */
+	if (opts->readonly || bdev->readonly) {
 		flags |= NTFS_MNT_RDONLY;
-	else if (opts->remove_hiberfile)
-		flags |= NTFS_MNT_IGNORE_HIBERFILE;
-	else
+	} else {
 		flags |= NTFS_MNT_MAY_RDONLY;
+		if (opts->remove_hiberfile)
+			flags |= NTFS_MNT_IGNORE_HIBERFILE | NTFS_MNT_RECOVER;
+		if (opts->reset_journal)
+			flags |= NTFS_MNT_RECOVER;
+	}
 
 	dev = n4m_device_new(v);
 	if (!dev) {
