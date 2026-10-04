@@ -21,10 +21,15 @@
 extern "C" {
 #endif
 
-#define N4M_VERSION "0.1.0"
-
 /* MFT record number of the NTFS root directory. */
 #define N4M_ROOT_INO 5ULL
+
+/* "0.1.0", from the VERSION file */
+const char *n4m_version(void);
+/* "NTFS4Mac 0.1.0 (v0.1.0-3-gabc1234, 2026-10-04)": git version and date */
+const char *n4m_version_long(void);
+/* version of the bundled libntfs-3g, "2026.9.28" */
+const char *n4m_ntfs3g_version(void);
 
 typedef struct n4m_volume n4m_volume;
 

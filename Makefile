@@ -17,6 +17,12 @@ CFLAGS   += $(ARCHFLAGS) -mmacosx-version-min=$(MIN_MACOS) -std=gnu11 -O2 -g \
 LDFLAGS  += $(ARCHFLAGS) -mmacosx-version-min=$(MIN_MACOS)
 LIBS      = $(NTFS3G)/lib/libntfs-3g.a -framework CoreFoundation
 
+# version: the VERSION file, plus git so every build says what it is
+VERSION   := $(shell cat VERSION)
+GIT_DESC  := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+GIT_DATE  := $(shell git log -1 --format=%cd --date=short 2>/dev/null || date -u +%Y-%m-%d)
+VERSION_INFO = $(VERSION) $(GIT_DESC) $(GIT_DATE)
+
 CORE_SRC  = $(wildcard src/core/*.c)
 CORE_OBJ  = $(patsubst src/%.c,build/obj/%.o,$(CORE_SRC))
 CORE_HDR  = $(wildcard src/core/*.h)
@@ -28,7 +34,7 @@ APP_OBJ   = $(patsubst src/%.c,build/obj/%.o,$(APP_SRC))
 APP_HDR   = $(wildcard src/nfs/*.h) $(wildcard src/cli/*.h)
 APP_LIBS  = $(LIBS) -framework DiskArbitration -framework IOKit
 
-.PHONY: all test clean ntfs3g dist install uninstall
+.PHONY: all test clean ntfs3g dist install uninstall FORCE
 
 all: build/libn4m.a build/enginetest build/ntfs4mac
 
@@ -40,6 +46,16 @@ ntfs3g: $(NTFS3G)/lib/libntfs-3g.a
 build/obj/%.o: src/%.c $(CORE_HDR) $(APP_HDR) | $(NTFS3G)/lib/libntfs-3g.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# only touched when the version info changes, so builds stay incremental
+build/version.stamp: FORCE
+	@mkdir -p build
+	@echo '$(VERSION_INFO)' | cmp -s - $@ || echo '$(VERSION_INFO)' > $@
+
+build/obj/core/version.o: src/core/version.c $(CORE_HDR) build/version.stamp | $(NTFS3G)/lib/libntfs-3g.a
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DN4M_VERSION_STR='"$(VERSION)"' -DN4M_GIT='"$(GIT_DESC)"' \
+		-DN4M_DATE='"$(GIT_DATE)"' -c $< -o $@
 
 build/obj/tests/%.o: tests/%.c $(CORE_HDR) | $(NTFS3G)/lib/libntfs-3g.a
 	@mkdir -p $(dir $@)
