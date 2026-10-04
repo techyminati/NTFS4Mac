@@ -255,9 +255,17 @@ static void maybe_flush(struct rpc_server *r, bool force)
 	uint64_t now = now_ms();
 
 	if (s->dirty && (force || now - s->last_flush_ms >= FLUSH_MS)) {
-		n4m_sync(s->vol);
-		s->dirty = false;
 		s->last_flush_ms = now;
+		if (n4m_sync(s->vol)) {
+			/*
+			 * The drive did not take the data. A new verifier makes
+			 * the client resend writes it has not seen committed
+			 * yet, and we try the flush again next round.
+			 */
+			arc4random_buf(s->writeverf, sizeof(s->writeverf));
+			return;
+		}
+		s->dirty = false;
 	}
 }
 
