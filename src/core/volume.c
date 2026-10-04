@@ -51,11 +51,39 @@ static int remove_hiberfile(struct n4m_volume *v)
 	return err;
 }
 
+static ntfs_volume *mount_dev(struct n4m_volume *v, ntfs_mount_flags flags,
+		int *err)
+{
+	struct ntfs_device *dev = n4m_device_new(v);
+	ntfs_volume *vol;
+
+	if (!dev) {
+		*err = ENOMEM;
+		return NULL;
+	}
+	errno = 0;
+	vol = ntfs_device_mount(dev, flags);
+	if (!vol) {
+		*err = n4m_errno();
+		free(dev->d_private);
+		ntfs_device_free(dev);
+	}
+	return vol;
+}
+
+static int umount_dev(ntfs_volume *vol)
+{
+	void *priv = vol->dev->d_private;
+	int err = ntfs_umount(vol, FALSE) ? n4m_errno() : 0;
+
+	free(priv);
+	return err;
+}
+
 int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 		n4m_volume **out)
 {
 	struct n4m_volume *v;
-	struct ntfs_device *dev;
 	ntfs_mount_flags flags = 0;
 	int err;
 
@@ -85,18 +113,25 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 			flags |= NTFS_MNT_RECOVER;
 	}
 
-	dev = n4m_device_new(v);
-	if (!dev) {
-		err = ENOMEM;
+	v->vol = mount_dev(v, flags, &err);
+	if (!v->vol)
 		goto fail;
-	}
-	errno = 0;
-	v->vol = ntfs_device_mount(dev, flags);
-	if (!v->vol) {
-		err = n4m_errno();
-		free(dev->d_private);
-		ntfs_device_free(dev);
-		goto fail;
+	v->was_dirty = (v->vol->flags & VOLUME_IS_DIRTY) != 0;
+
+	/*
+	 * The NTFS dirty flag means Windows wants to check the volume (or a
+	 * previous session did not end cleanly). Do not write to it then,
+	 * unless the user explicitly chose to.
+	 */
+	if (!NVolReadOnly(v->vol) && v->was_dirty && !opts->reset_journal &&
+			!opts->remove_hiberfile) {
+		n4m_log(0, "volume is marked dirty (Windows wants to check it),"
+			" mounting read only");
+		umount_dev(v->vol);
+		v->vol = mount_dev(v, NTFS_MNT_RDONLY, &err);
+		if (!v->vol)
+			goto fail;
+		v->unclean = true;
 	}
 
 	/*
@@ -107,7 +142,7 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 	{
 		NTFS_BOOT_SECTOR bs;
 
-		if (ntfs_pread(dev, 0, sizeof(bs), &bs) == sizeof(bs))
+		if (ntfs_pread(v->vol->dev, 0, sizeof(bs), &bs) == sizeof(bs))
 			v->serial = le64_to_cpu(bs.volume_serial_number);
 	}
 
@@ -135,7 +170,7 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 		n4m_log(1, "removed hiberfil.sys, volume is now writable");
 	}
 
-	if (NVolReadOnly(v->vol) && !(flags & NTFS_MNT_RDONLY)) {
+	if (NVolReadOnly(v->vol) && !(flags & NTFS_MNT_RDONLY) && !v->unclean) {
 		/* ntfs-3g fell back to read only, find out why */
 		if (ntfs_volume_check_hiberfile(v->vol, 0) < 0)
 			v->was_hibernated = true;
@@ -144,13 +179,23 @@ int n4m_mount(n4m_blockdev *bdev, const n4m_mount_opts *opts,
 			"and shut it down fully (or disable Fast Startup) to "
 			"write to it.");
 	}
-	v->was_dirty = (v->vol->flags & VOLUME_IS_DIRTY) != 0;
 	v->readonly = NVolReadOnly(v->vol);
+	/*
+	 * Like Windows: mark the volume dirty while we may write to it and
+	 * clear it again on a clean unmount. If the drive gets pulled out
+	 * or we crash, Windows sees the flag and checks the volume.
+	 */
+	if (!v->readonly && !v->was_dirty &&
+			ntfs_volume_write_flags(v->vol,
+				v->vol->flags | VOLUME_IS_DIRTY)) {
+		err = n4m_errno();
+		goto fail_umount;
+	}
 	*out = v;
 	return 0;
 
 fail_umount:
-	ntfs_umount(v->vol, FALSE);
+	umount_dev(v->vol);
 	v->vol = NULL;
 fail:
 	n4m_device_free_cache(v);
@@ -161,18 +206,25 @@ fail:
 
 int n4m_unmount(n4m_volume *v)
 {
-	struct ntfs_device *dev;
-	void *priv;
 	int err = 0;
 
 	if (!v)
 		return EINVAL;
 	LOCK(v);
-	dev = v->vol->dev;
-	priv = dev->d_private;
-	if (ntfs_umount(v->vol, FALSE))
-		err = n4m_errno();
-	free(priv);
+	/*
+	 * Everything goes to the disk first, then the volume is marked
+	 * clean. A flag we found set at mount time is left alone, Windows
+	 * still has to check that volume.
+	 */
+	if (!v->readonly && !v->was_dirty) {
+		if (ntfs_device_sync(v->vol->dev) == 0)
+			ntfs_volume_write_flags(v->vol,
+				v->vol->flags & ~VOLUME_IS_DIRTY);
+		else
+			n4m_log(0, "flushing the drive failed, leaving the "
+				"volume marked dirty so Windows checks it");
+	}
+	err = umount_dev(v->vol);
 	v->vol = NULL;
 	UNLOCK(v);
 	n4m_device_free_cache(v);

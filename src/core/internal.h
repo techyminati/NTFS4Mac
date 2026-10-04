@@ -42,7 +42,8 @@ struct n4m_volume {
 	gid_t gid;
 	bool readonly;
 	bool was_hibernated;
-	bool was_dirty;
+	bool was_dirty;		/* dirty flag was set before we mounted */
+	bool unclean;		/* forced read only because of that */
 	uint64_t serial;
 	uint64_t tmp_seq;	/* for temporary names during rename */
 	/* inodes whose mtime update is deferred, see file.c */
