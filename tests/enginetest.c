@@ -449,6 +449,27 @@ int main(int argc, char **argv)
 		CHECK(listed(l, "moved.txt"), "file listed once");
 	}
 
+	section("files over 4 GiB (sparse)");
+	{
+		uint64_t sp = mk(ROOT, "sparse.bin", N4M_TYPE_FILE);
+		uint64_t far = (5ULL << 30) + 12345;	/* past 4 GiB */
+		char zeros[4096] = { 0 };
+
+		put(sp, far, "far away", 8);
+		OK(n4m_getattr(vol, sp, &a));
+		CHECK(a.size == far + 8, "size %llu", (unsigned long long)a.size);
+		CHECK(a.alloc_size < (64ULL << 20), "should be sparse, %llu "
+			"bytes allocated", (unsigned long long)a.alloc_size);
+		CHECK(same_data(sp, far, "far away", 8), "data past 4 GiB");
+		CHECK(same_data(sp, 1ULL << 32, zeros, sizeof(zeros)),
+			"hole reads as zeros");
+		CHECK(same_data(sp, far - 100, zeros, 100), "zeros just before");
+		put(sp, (4ULL << 30) - 2, "edge", 4);	/* across 4 GiB */
+		CHECK(same_data(sp, (4ULL << 30) - 2, "edge", 4),
+			"write across the 4 GiB line");
+		OK(n4m_remove(vol, ROOT, "sparse.bin", false));
+	}
+
 	section("64 MiB file");
 	{
 		uint64_t g = mk(ROOT, "big.bin", N4M_TYPE_FILE);
