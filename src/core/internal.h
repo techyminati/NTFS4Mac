@@ -45,6 +45,8 @@ struct n4m_volume {
 	bool was_dirty;
 	uint64_t serial;
 	uint64_t tmp_seq;	/* for temporary names during rename */
+	/* inodes whose mtime update is deferred, see file.c */
+	uint64_t pending[64];
 };
 
 #define LOCK(v)		pthread_mutex_lock(&(v)->lock)
