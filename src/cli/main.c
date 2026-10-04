@@ -53,7 +53,9 @@ static void usage(void)
 "\n"
 "unmount options:\n"
 "  --eject              also eject the drive so you can unplug it\n"
-"  --force              unmount even if files are open\n",
+"  --force              unmount even if files are open\n"
+"\n"
+"NTFS4Mac is free software. If you paid for it, you were scammed.\n",
 		n4m_version());
 }
 
@@ -77,6 +79,8 @@ static int cmd_about(void)
 	printf("           aryan@cipheros.org.in\n");
 	printf("Built on   libntfs-3g %s by the ntfs-3g developers (GNU GPL v2 "
 		"or later)\n", n4m_ntfs3g_version());
+	printf("\nNTFS4Mac is free software. If you paid for it, you were "
+		"scammed: ask for\nyour money back and report the seller.\n");
 	printf("\nNo warranty of any kind. Back up what you care about, and "
 		"always eject\nbefore unplugging.\n");
 	return 0;
