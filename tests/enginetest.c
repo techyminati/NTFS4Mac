@@ -533,6 +533,26 @@ int main(int argc, char **argv)
 	ERR(n4m_create(vol, ROOT, "nope", N4M_TYPE_FILE, 0644, &a), EROFS);
 	OK(n4m_unmount(vol));
 
+	section("dirty flag (drive pulled out or still in use)");
+	do_mount(false);
+	{
+		n4m_volume *first = vol;
+
+		/* the first mount marked the volume dirty on disk */
+		do_mount(false);
+		OK(n4m_volinfo_get(vol, &info));
+		CHECK(info.readonly, "a dirty volume must mount read only");
+		CHECK(info.was_dirty, "dirty flag seen");
+		OK(n4m_unmount(vol));
+		vol = first;
+	}
+	OK(n4m_unmount(vol));
+	do_mount(false);
+	OK(n4m_volinfo_get(vol, &info));
+	CHECK(!info.readonly && !info.was_dirty,
+		"clean again after a proper unmount");
+	OK(n4m_unmount(vol));
+
 	section("hibernated Windows (Fast Startup)");
 	do_mount(false);
 	{
