@@ -188,6 +188,23 @@ static void bc_update(struct n4m_cache *c, uint64_t off, const void *buf,
 	}
 }
 
+/* Forgets cached copies of a range whose write failed half way. */
+static void bc_invalidate(struct n4m_cache *c, uint64_t off, size_t len)
+{
+	uint64_t blk, first, last;
+
+	if (!c || !len)
+		return;
+	first = off / c->bsize;
+	last = (off + len - 1) / c->bsize;
+	for (blk = first; blk <= last; blk++) {
+		struct cblock *b = bc_find(c, blk);
+
+		if (b)
+			hash_remove(c, b);
+	}
+}
+
 /* ---- aligned access to the backing device ---------------------------- */
 
 static int raw_read(struct n4m_volume *v, void *buf, uint64_t off,
@@ -260,6 +277,8 @@ static int aligned_write(struct n4m_volume *v, const void *buf, uint64_t off,
 
 	if (!err)
 		bc_update(v->cache, off, buf, len);
+	else
+		bc_invalidate(v->cache, off, len);
 	return err;
 }
 
