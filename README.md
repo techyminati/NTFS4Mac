@@ -103,7 +103,7 @@ Other handy bits:
 
 ```sh
 ntfs4mac info disk4s1                          # name, size, free space
-sudo ntfs4mac mount disk4s1 --read-only        # look but don't touch
+sudo ntfs4mac mount disk4s1 --read-only        # look but don't touch, nothing is written
 sudo ntfs4mac mount disk4s1 ~/mnt/win          # mount somewhere else
 sudo ntfs4mac mount disk4s1 --foreground       # stay in the terminal with logs
 ```
@@ -130,7 +130,10 @@ sudo ntfs4mac uninstall
 
 ### "It mounted read-only, why?"
 
-Windows didn't fully shut down. Windows 10 and 11 have **Fast Startup** turned on by default, which hibernates instead of shutting down, and writing to a hibernated NTFS drive can destroy data. Best fix: boot Windows, then shut down while holding Shift (or turn Fast Startup off in Power Options). If you know you don't need that Windows session, `--remove-hiberfile` deletes the hibernation file and mounts read-write anyway.
+NTFS4Mac only writes to drives Windows left in a clean state, and tells you which case you hit:
+
+- **Windows is hibernated.** Windows 10 and 11 have **Fast Startup** on by default, which hibernates instead of shutting down, and writing to a hibernated NTFS drive can destroy data. Fix: boot Windows, then shut down while holding Shift (or turn Fast Startup off in Power Options). If you know you don't need that Windows session, `--remove-hiberfile` deletes the hibernation file and mounts read-write anyway.
+- **Windows didn't close the drive cleanly** (it crashed, or the drive was unplugged while in use). NTFS's journal still holds unfinished changes that only Windows can replay. Fix: plug it into Windows and let it check the drive (`chkdsk X: /f`). If that's not possible, `--reset-journal` throws the journal away and mounts read-write anyway. ntfs-3g does that by default, NTFS4Mac doesn't, because it's the riskier choice.
 
 ## Testing it safely
 
