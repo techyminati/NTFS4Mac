@@ -99,10 +99,11 @@ static void fill_pattern(unsigned char *p, size_t len, unsigned seed)
 	}
 }
 
-static void do_mount(bool ro)
+static void do_mount2(bool ro, bool remove_hiberfile)
 {
 	n4m_blockdev dev;
-	n4m_mount_opts o = { .readonly = ro, .uid = getuid(), .gid = getgid() };
+	n4m_mount_opts o = { .readonly = ro, .uid = getuid(), .gid = getgid(),
+		.remove_hiberfile = remove_hiberfile };
 	int e = n4m_blockdev_open_path(image, ro, &dev);
 
 	CHECK(e == 0, "open %s -> %s", image, strerror(e));
@@ -112,6 +113,11 @@ static void do_mount(bool ro)
 	CHECK(e == 0, "mount -> %s", strerror(e));
 	if (e)
 		exit(1);
+}
+
+static void do_mount(bool ro)
+{
+	do_mount2(ro, false);
 }
 
 /* readdir helpers */
@@ -485,6 +491,30 @@ int main(int argc, char **argv)
 	section("read only mount");
 	do_mount(true);
 	ERR(n4m_create(vol, ROOT, "nope", N4M_TYPE_FILE, 0644, &a), EROFS);
+	OK(n4m_unmount(vol));
+
+	section("hibernated Windows (Fast Startup)");
+	do_mount(false);
+	{
+		char *hb = calloc(1, 8192);
+		uint64_t h = mk(ROOT, "hiberfil.sys", N4M_TYPE_FILE);
+
+		memcpy(hb, "HIBR", 4);
+		put(h, 0, hb, 8192);
+		free(hb);
+	}
+	OK(n4m_unmount(vol));
+	do_mount(false);
+	OK(n4m_volinfo_get(vol, &info));
+	CHECK(info.readonly, "hibernated volume must mount read only");
+	CHECK(info.was_hibernated, "hibernation detected");
+	ERR(n4m_create(vol, ROOT, "nope", N4M_TYPE_FILE, 0644, &a), EROFS);
+	OK(n4m_unmount(vol));
+	do_mount2(false, true);
+	OK(n4m_volinfo_get(vol, &info));
+	CHECK(!info.readonly, "writable after removing hiberfil.sys");
+	CHECK(find(ROOT, "hiberfil.sys") == 0, "hiberfil.sys removed");
+	CHECK(find(ROOT, "big.bin") != 0, "other files untouched");
 	OK(n4m_unmount(vol));
 
 	free(buf);
