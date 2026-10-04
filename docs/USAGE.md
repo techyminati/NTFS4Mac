@@ -53,6 +53,7 @@ ntfs4mac mount ~/test.img ~/mnt/test
 NTFS4Mac only writes to drives Windows left in a clean state:
 
 - **Windows is hibernated.** Windows 10 and 11 have **Fast Startup** on by default, which hibernates instead of really shutting down. Writing to a hibernated drive can destroy data. Fix it by booting Windows and shutting down while holding Shift, or turn Fast Startup off in Power Options. If you are sure you don't need that Windows session, `--remove-hiberfile` deletes the hibernation file and mounts read-write.
+- **The drive is marked "in use" or "needs checking".** While NTFS4Mac has a drive mounted read-write it sets the NTFS dirty flag, exactly like Windows, and clears it on a clean unmount. If the drive was unplugged without ejecting, or Windows scheduled a disk check, the flag is still set. Fix it by plugging the drive into Windows: Windows sees the flag and checks the drive by itself (or run `chkdsk X: /f`). `--reset-journal` mounts it read-write anyway.
 - **Windows didn't close the drive cleanly** (it crashed, or the drive was unplugged while in use). The NTFS journal still holds unfinished changes only Windows can replay. Fix it by plugging the drive into Windows and running `chkdsk X: /f`. If that's not possible, `--reset-journal` throws the journal away and mounts read-write anyway. ntfs-3g does that by default, NTFS4Mac doesn't, because it's the riskier choice.
 
 ## Plug and play details

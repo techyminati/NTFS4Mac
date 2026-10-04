@@ -42,9 +42,14 @@ New symlinks with a relative target are stored as real Windows symlinks (directo
 ## Keeping your data safe
 
 - If Windows is hibernated (Fast Startup) or left its journal dirty (crash, drive pulled out), NTFS4Mac mounts read only and says why. It does not wipe the journal unless you explicitly ask with `--reset-journal`.
+- Like Windows, NTFS4Mac sets the NTFS dirty flag while a drive is mounted read-write and clears it only after a clean, fully flushed unmount. If the drive gets pulled out (or anything crashes), Windows notices and checks the drive by itself, and NTFS4Mac mounts it read only until that happened.
+- Only one NTFS4Mac process can have a drive open at a time (an exclusive lock held for the whole mount), so two writers can never trample each other.
+- "Online only" cloud files (OneDrive Files On-Demand and similar) are refused instead of reading back as zeros.
+- Folder listings are served from a snapshot taken at the start of each listing, so a folder that changes while it is being listed never makes files get skipped.
+- NTFS4Mac never force-unmounts on its own. When asked to stop while files are open, it keeps serving and retries until they are closed.
 - Files whose data lives somewhere NTFS4Mac can't decode (Windows CompactOS/WOF compression, Data Deduplication, EFS encryption) return an error, never garbage.
 - Rename never drops the file being replaced until the new name is in place. If something fails half way it is kept under a hidden temporary name.
-- Data written to a file goes to the disk right away. The drive's own cache is flushed every couple of seconds while writing and always when unmounting.
+- Data written to a file goes to the disk right away. The drive's own cache is flushed every couple of seconds while writing and always when unmounting. If a flush fails, macOS is told to resend the data it hasn't seen committed.
 - Like ntfs-3g, NTFS4Mac doesn't journal its own changes. Always eject before unplugging.
 
 ## Speed
