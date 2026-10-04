@@ -1,0 +1,80 @@
+# Builds and tests NTFS4Mac on every push and pull request.
+# Pushing a version tag (v0.1.0, ...) also publishes a GitHub release with
+# the universal binary, which is what install.sh downloads.
+#
+#   git tag v0.1.0 && git push k v0.1.0
+
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install autoconf automake libtool
+
+      - name: Check the tag matches the version in the code
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          code="v$(sed -n 's/^#define N4M_VERSION "\(.*\)"/\1/p' src/core/n4m.h)"
+          if [ "$code" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME but src/core/n4m.h says $code"
+            exit 1
+          fi
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+
+      - name: Package
+        run: make dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ntfs4mac-macos
+          path: |
+            dist/ntfs4mac-macos.tar.gz
+            dist/ntfs4mac-macos.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ntfs4mac-macos
+          path: dist
+
+      - name: Verify the checksum
+        run: cd dist && sha256sum -c ntfs4mac-macos.tar.gz.sha256
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/ntfs4mac-macos.tar.gz \
+            dist/ntfs4mac-macos.tar.gz.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "NTFS4Mac $GITHUB_REF_NAME" \
+            --generate-notes
