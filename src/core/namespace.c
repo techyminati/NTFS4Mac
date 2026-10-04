@@ -163,6 +163,31 @@ static int do_unlink(struct n4m_volume *v, u64 dir, const ntfschar *u,
 	return err;
 }
 
+/*
+ * Undo step during a failed rename: drops a name we just added, but never
+ * the last name of an inode. libntfs-3g can report a failure after the
+ * old name was already removed, and then this name is all that is left.
+ */
+static void rollback_unlink(struct n4m_volume *v, u64 dir, const ntfschar *u,
+		int ulen, u64 ino)
+{
+	ntfs_inode *ni;
+	uint32_t names = 0;
+	int err = 0;
+
+	ni = n4m_iopen(v, ino, &err);
+	if (ni) {
+		names = n4m_name_count(ni);
+		ntfs_inode_close(ni);
+	}
+	if (names < 2) {
+		n4m_log(0, "rename: keeping an extra name instead of risking "
+			"the file (inode %llu)", (unsigned long long)ino);
+		return;
+	}
+	do_unlink(v, dir, u, ulen, ino);
+}
+
 int n4m_create(n4m_volume *v, uint64_t dir, const char *name, int type,
 		uint32_t mode, n4m_attr *attr)
 {
@@ -313,7 +338,7 @@ static bool is_ancestor(struct n4m_volume *v, u64 anc, u64 dir)
 			return false;
 		ni = n4m_iopen(v, cur, &err);
 		if (!ni)
-			return false;
+			return true;	/* can not tell, refuse the move */
 		cur = n4m_parent_of(ni);
 		ntfs_inode_close(ni);
 	}
@@ -397,14 +422,14 @@ int n4m_rename(n4m_volume *v, uint64_t fromdir, const char *fromname,
 			goto out;
 		err = do_unlink(v, fromdir, smatch, smlen, src);
 		if (err) {
-			do_unlink(v, todir, tmp, tmplen, src);
+			rollback_unlink(v, todir, tmp, tmplen, src);
 			goto out;
 		}
 		err = do_link(v, src, todir, uto, utolen, hidden);
 		if (err) {
 			/* put the old name back */
 			do_link(v, src, fromdir, smatch, smlen, old_hidden);
-			do_unlink(v, todir, tmp, tmplen, src);
+			rollback_unlink(v, todir, tmp, tmplen, src);
 			goto out;
 		}
 		if (do_unlink(v, todir, tmp, tmplen, src))
@@ -438,7 +463,7 @@ int n4m_rename(n4m_volume *v, uint64_t fromdir, const char *fromname,
 		/* 2. free the destination name */
 		err = do_unlink(v, todir, dmatch, dmlen, dst);
 		if (err) {
-			do_unlink(v, todir, tmp, tmplen, dst);
+			rollback_unlink(v, todir, tmp, tmplen, dst);
 			goto out;
 		}
 		/* 3. give the source its new name */
@@ -448,7 +473,7 @@ int n4m_rename(n4m_volume *v, uint64_t fromdir, const char *fromname,
 		/* 4. drop the old source name */
 		err = do_unlink(v, fromdir, smatch, smlen, src);
 		if (err) {
-			do_unlink(v, todir, uto, utolen, src);
+			rollback_unlink(v, todir, uto, utolen, src);
 			goto restore;
 		}
 		/* 5. now the old destination can go */
@@ -458,7 +483,7 @@ int n4m_rename(n4m_volume *v, uint64_t fromdir, const char *fromname,
 		goto out;
 restore:
 		if (do_link(v, dst, todir, dmatch, dmlen, -1) == 0)
-			do_unlink(v, todir, tmp, tmplen, dst);
+			rollback_unlink(v, todir, tmp, tmplen, dst);
 		else
 			n4m_log(0, "rename failed, the replaced file is still "
 				"there under a hidden temporary name");
@@ -471,7 +496,7 @@ restore:
 		goto out;
 	err = do_unlink(v, fromdir, smatch, smlen, src);
 	if (err)
-		do_unlink(v, todir, uto, utolen, src);
+		rollback_unlink(v, todir, uto, utolen, src);
 out:
 	UNLOCK(v);
 	free(uto);
