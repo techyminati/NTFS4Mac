@@ -38,7 +38,7 @@ That's it.
 
 **Unplugged without ejecting?** Then the drive shows up read only next time, on purpose: NTFS4Mac marks a drive "in use" while it's mounted, just like Windows does. Plug it into Windows once, Windows checks it automatically, and it's writable on the Mac again.
 
-**Is it safe?** NTFS4Mac uses the same NTFS engine Linux has relied on for over 15 years, never writes to a drive Windows left in a risky state, and makes sure only one program writes to a drive at a time. It's also tested hard. But it's a new project, so for now keep backups of anything irreplaceable, and always eject before unplugging.
+**Is it safe?** NTFS4Mac uses the same NTFS engine Linux has relied on for over 15 years, never writes to a drive Windows left in a risky state, and makes sure only one program writes to a drive at a time. It's also tested hard.
 
 **Things that work a bit differently:**
 - Deleting files on the drive is immediate (there's no Trash on it).
