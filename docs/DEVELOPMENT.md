@@ -34,7 +34,7 @@ For real drives: use a spare one first, then check it on Windows with `chkdsk X:
 GitHub Actions (`.github/workflows/build.yml`) builds and tests every push and pull request. To publish a release:
 
 1. bump the `VERSION` file and commit
-2. tag and push: `git tag v0.1.0 && git push k v0.1.0` (use your remote's name)
+2. tag and push: `git tag 0.1.0 && git push a main 0.1.0` (`v0.1.0` works too)
 
 The workflow checks the tag matches `VERSION`, builds the universal binary, runs the tests and publishes a GitHub release with `ntfs4mac-macos.tar.gz` and its `.sha256`. `install.sh` always tries the latest release first, so users don't need Xcode. `make dist` builds the same tarball locally. It carries `LICENSE` and ntfs-3g's own license text as `COPYING.ntfs-3g`.
 
