@@ -21,6 +21,18 @@ ASSET="ntfs4mac-macos.tar.gz"
 MIN_MACOS="15.4"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+
+# Downloads robustly. One of GitHub's download servers is unreachable from
+# some networks, and plain curl waits 30 to 45 seconds on it before trying
+# the next one. A short connect timeout skips it within a few seconds.
+fetch() {	# fetch <url> <file> [bar]
+	local show="-sS"
+	if [ "${3:-}" = bar ] && [ -t 2 ]; then
+		show="--progress-bar"
+	fi
+	curl -fL "$show" --connect-timeout 6 --retry 3 --retry-delay 1 \
+		--retry-connrefused -o "$2" "$1"
+}
 info() { printf '  %s\n' "$*"; }
 die() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -141,18 +153,33 @@ build_from() {	# build_from <source dir>
 # 1. the latest release
 BIN=""
 if [ "${NTFS4MAC_FROM_SOURCE:-0}" != 1 ]; then
-	if [ -z "${NTFS4MAC_RELEASE_URL:-}" ]; then
-		tag="$(curl -fsSL --max-time 15 \
-			"https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
-			sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1 || true)"
-	else
-		tag=""
+	# the release info also carries the file's sha256, which saves a
+	# second trip to the download server
+	tag="" asset_url="" digest=""
+	if [ -z "${NTFS4MAC_RELEASE_URL:-}" ] && fetch \
+			"https://api.github.com/repos/$REPO/releases/latest" \
+			"$WORK/release.json" 2>/dev/null; then
+		tag="$(plutil -extract tag_name raw -o - "$WORK/release.json" 2>/dev/null || true)"
+		i=0
+		while name="$(plutil -extract "assets.$i.name" raw -o - "$WORK/release.json" 2>/dev/null)"; do
+			if [ "$name" = "$ASSET" ]; then
+				asset_url="$(plutil -extract "assets.$i.browser_download_url" raw -o - "$WORK/release.json" 2>/dev/null || true)"
+				digest="$(plutil -extract "assets.$i.digest" raw -o - "$WORK/release.json" 2>/dev/null || true)"
+				break
+			fi
+			i=$((i + 1))
+		done
 	fi
-	url="${NTFS4MAC_RELEASE_URL:-https://github.com/$REPO/releases/latest/download}/$ASSET"
+	url="${asset_url:-${NTFS4MAC_RELEASE_URL:-https://github.com/$REPO/releases/latest/download}/$ASSET}"
 	info "downloading the latest release${tag:+ ($tag)}"
-	if curl -fsSL -o "$WORK/$ASSET" "$url" &&
-			curl -fsSL -o "$WORK/$ASSET.sha256" "$url.sha256"; then
-		(cd "$WORK" && shasum -a 256 -c "$ASSET.sha256" >/dev/null) ||
+	if fetch "$url" "$WORK/$ASSET" bar; then
+		want=""
+		case "$digest" in sha256:*) want="${digest#sha256:}" ;; esac
+		if [ -z "$want" ] && fetch "$url.sha256" "$WORK/$ASSET.sha256"; then
+			want="$(awk '{ print $1; exit }' "$WORK/$ASSET.sha256")"
+		fi
+		got="$(shasum -a 256 "$WORK/$ASSET" | awk '{ print $1 }')"
+		[ -n "$want" ] && [ "$want" = "$got" ] ||
 			die "the download is damaged (checksum mismatch), please try again"
 		tar -xzf "$WORK/$ASSET" -C "$WORK"
 		BIN="$WORK/ntfs4mac/ntfs4mac"
