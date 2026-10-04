@@ -145,6 +145,15 @@ static void count_links(ntfs_inode *ni, uint32_t *nlink, uint64_t *parent)
 	*nlink = n ? n : 1;
 }
 
+uint32_t n4m_name_count(ntfs_inode *ni)
+{
+	uint32_t nlink;
+	uint64_t parent;
+
+	count_links(ni, &nlink, &parent);
+	return nlink;
+}
+
 int n4m_fill_attr(struct n4m_volume *v, ntfs_inode *ni, n4m_attr *a)
 {
 	le32 tag;
@@ -231,6 +240,59 @@ int n4m_getattr(n4m_volume *v, uint64_t ino, n4m_attr *attr)
 
 /* ---- lookup ----------------------------------------------------------- */
 
+/*
+ * After a case insensitive match, fetch the name exactly as it is stored
+ * in dir for inode ino. ntfs_delete() compares POSIX names (the kind
+ * ntfs-3g and NTFS4Mac create) case sensitively, so removing or renaming
+ * needs the stored spelling, not the one the user typed.
+ */
+static int stored_name(ntfs_inode *dir_ni, u64 ino, const ntfschar *cand,
+		int clen, ntfschar **out, int *outlen)
+{
+	ntfs_volume *vol = dir_ni->vol;
+	ntfs_attr_search_ctx *ctx;
+	ntfs_inode *ni;
+	ntfschar *best = NULL;
+	int blen = 0;
+	bool exact = false;
+
+	if (ino == dir_ni->mft_no)
+		return EINVAL;
+	ni = ntfs_inode_open(vol, ino);
+	if (!ni)
+		return n4m_errno();
+	ctx = ntfs_attr_get_search_ctx(ni, NULL);
+	while (ctx && !exact && !ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0,
+			CASE_SENSITIVE, 0, NULL, 0, ctx)) {
+		FILE_NAME_ATTR *fn = (FILE_NAME_ATTR *)((u8 *)ctx->attr +
+				le16_to_cpu(ctx->attr->value_offset));
+
+		if (MREF_LE(fn->parent_directory) != dir_ni->mft_no ||
+				fn->file_name_type == FILE_NAME_DOS)
+			continue;
+		if (!ntfs_names_are_equal(fn->file_name,
+				fn->file_name_length, cand, (size_t)clen,
+				IGNORE_CASE, vol->upcase, vol->upcase_len))
+			continue;
+		exact = fn->file_name_length == clen && !memcmp(
+			fn->file_name, cand, (size_t)clen * sizeof(ntfschar));
+		free(best);
+		blen = fn->file_name_length;
+		best = malloc(((size_t)blen + 1) * sizeof(ntfschar));
+		if (best)
+			memcpy(best, fn->file_name,
+				(size_t)blen * sizeof(ntfschar));
+	}
+	if (ctx)
+		ntfs_attr_put_search_ctx(ctx);
+	ntfs_inode_close(ni);
+	if (!best)
+		return ENOENT;
+	*out = best;
+	*outlen = blen;
+	return 0;
+}
+
 static u64 lookup_one(ntfs_inode *dir_ni, const ntfschar *u, int ulen,
 		bool ignore_case)
 {
@@ -310,7 +372,9 @@ int n4m_lookup_ni(struct n4m_volume *v, ntfs_inode *dir_ni, const char *name,
 	if (m != (u64)-1) {
 		*mref = m;
 		err = 0;
-		if (matched) {
+		/* DOS 8.3 names are not in the list, keep what matched then */
+		if (matched && stored_name(dir_ni, MREF(m), cand[i], clen[i],
+				matched, matched_len)) {
 			*matched = cand[i];
 			*matched_len = clen[i];
 			cand[i] = NULL;
