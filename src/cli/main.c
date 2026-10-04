@@ -26,6 +26,8 @@
 
 extern char **environ;
 
+#define N4M_HOMEPAGE "https://github.com/techyminati/NTFS4Mac"
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -38,6 +40,8 @@ static void usage(void)
 "  ntfs4mac info <disk|image>            details about a volume\n"
 "  sudo ntfs4mac install                 auto-mount NTFS drives read-write\n"
 "  sudo ntfs4mac uninstall               turn auto-mount off\n"
+"  ntfs4mac version                      version and build details\n"
+"  ntfs4mac about                        developers, license, credits\n"
 "\n"
 "mount options:\n"
 "  --read-only          mount without write access\n"
@@ -50,7 +54,32 @@ static void usage(void)
 "unmount options:\n"
 "  --eject              also eject the drive so you can unplug it\n"
 "  --force              unmount even if files are open\n",
-		N4M_VERSION);
+		n4m_version());
+}
+
+static int cmd_version(void)
+{
+	printf("%s\n", n4m_version_long());
+	printf("libntfs-3g %s with NTFS4Mac patches\n", n4m_ntfs3g_version());
+	return 0;
+}
+
+static int cmd_about(void)
+{
+	printf("%s\n", n4m_version_long());
+	printf("Read and write NTFS drives on your Mac.\n\n");
+	printf("Developer  Aryan Sinha (techyminati)\n");
+	printf("Project    %s\n", N4M_HOMEPAGE);
+	printf("License    CipherOS License 2.0, \u00a9 2019-2026 The CipherOS "
+		"Project\n");
+	printf("           commercial or third party use needs written "
+		"permission:\n");
+	printf("           aryan@cipheros.org.in\n");
+	printf("Built on   libntfs-3g %s by the ntfs-3g developers (GNU GPL v2 "
+		"or later)\n", n4m_ntfs3g_version());
+	printf("\nNo warranty of any kind. Back up what you care about, and "
+		"always eject\nbefore unplugging.\n");
+	return 0;
 }
 
 static void human(uint64_t n, char *buf, size_t bufsz)
@@ -501,10 +530,12 @@ int main(int argc, char **argv)
 		return install_main();
 	if (!strcmp(argv[1], "uninstall"))
 		return uninstall_main();
-	if (!strcmp(argv[1], "version") || !strcmp(argv[1], "--version")) {
-		printf("NTFS4Mac %s\n", N4M_VERSION);
-		return 0;
-	}
+	if (!strcmp(argv[1], "version") || !strcmp(argv[1], "--version") ||
+			!strcmp(argv[1], "-v"))
+		return cmd_version();
+	if (!strcmp(argv[1], "about") || !strcmp(argv[1], "--about") ||
+			!strcmp(argv[1], "-a"))
+		return cmd_about();
 	usage();
 	return 2;
 }
