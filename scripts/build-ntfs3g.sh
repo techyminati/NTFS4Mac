@@ -15,7 +15,10 @@ if [ ! -f "$SRC/configure.ac" ]; then
 	exit 1
 fi
 
-if [ -f "$PREFIX/lib/libntfs-3g.a" ] && [ "${FORCE:-0}" != "1" ]; then
+# rebuild when our patches change
+PATCH_SUM="$(cat "$ROOT"/patches/ntfs-3g/*.patch 2>/dev/null | shasum | cut -d' ' -f1)"
+if [ -f "$PREFIX/lib/libntfs-3g.a" ] && [ "${FORCE:-0}" != "1" ] &&
+		[ "$(cat "$PREFIX/.patches" 2>/dev/null)" = "$PATCH_SUM" ]; then
 	echo "libntfs-3g already built (FORCE=1 to rebuild)"
 	exit 0
 fi
@@ -26,6 +29,13 @@ for a in $ARCHS; do ARCH_FLAGS="$ARCH_FLAGS -arch $a"; done
 rm -rf "$WORK" "$PREFIX"
 mkdir -p "$WORK"
 rsync -a --exclude .git "$SRC/" "$WORK/"
+
+# fixes we carry on top of upstream, see patches/ntfs-3g
+for p in "$ROOT"/patches/ntfs-3g/*.patch; do
+	[ -f "$p" ] || continue
+	echo "applying $(basename "$p")"
+	patch -s -p1 -d "$WORK" < "$p"
+done
 
 cd "$WORK"
 autoreconf --install --force >/dev/null 2>&1
@@ -53,4 +63,5 @@ make install >/dev/null
 # config.h is needed by anything including the internal headers
 cp "$WORK/config.h" "$PREFIX/include/ntfs-3g/config.h"
 
+echo "$PATCH_SUM" > "$PREFIX/.patches"
 echo "libntfs-3g built into $PREFIX"
