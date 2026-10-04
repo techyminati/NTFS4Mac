@@ -141,6 +141,18 @@ Please test before trusting it with the only copy of anything.
 2. **Then a spare drive.** Use a USB stick formatted as NTFS on Windows, or a drive whose data is backed up. Mount it, copy things on and off, rename, delete, eject.
 3. **Then back on Windows.** Open the files, and run `chkdsk X:` to confirm the file system is clean.
 
+## Speed
+
+Measured on a MacBook's internal SSD through the whole stack (Finder style `cp`, macOS NFS client, NTFS4Mac, NTFS on a disk image), timed until the data was really flushed to disk: about **380 MB/s writing** and **720 MB/s reading**. So with real drives, the drive itself is the limit: a USB hard disk does 100 to 150 MB/s, a USB SSD a lot more.
+
+## Troubleshooting
+
+- **See what happened:** `tail -50 /var/log/ntfs4mac.log` (or `~/Library/Logs/ntfs4mac.log` when you ran it without sudo).
+- **Finder says the drive is busy when ejecting:** something still has a file open. Quit the app, or `sudo ntfs4mac unmount disk4s1 --force`.
+- **A mount got stuck** (Finder spins, "server not responding"): `sudo umount -f "/Volumes/Your Drive"`, then mount it again. Please report it with the log, that's a bug.
+- **Mounted read only:** see "It mounted read-only, why?" above.
+- **macOS should handle a drive itself:** put its name in `/Library/Application Support/NTFS4Mac/ignore`.
+
 ## Things to know
 
 NTFS4Mac is young. These are the current rough edges:
