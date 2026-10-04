@@ -660,7 +660,8 @@ static void p_write(struct nfs_server *s, struct xdr_in *in,
 		if (st == NFS3_OK && stable != UNSTABLE) {
 			if (!fh.ad)
 				n4m_close_write(s->vol, a.ino);
-			n4m_sync(s->vol);
+			if (n4m_sync(s->vol))
+				st = NFS3ERR_IO;
 		}
 	}
 	xdr_put_u32(out, st);
@@ -918,6 +919,8 @@ static int move_ad(struct nfs_server *s, const n4m_attr *from,
 		if (!err)
 			err = n4m_stream_write(s->vol, to->ino, AD, off, got,
 				buf, &put);
+		if (!err && put != got)
+			err = ENOSPC;	/* never delete the source then */
 		off += got;
 	}
 	free(buf);
