@@ -1,0 +1,25 @@
+--- a/libntfs-3g/dir.c	2026-10-04 13:51:19
++++ b/libntfs-3g/dir.c	2026-10-04 13:51:19
+@@ -1313,7 +1313,12 @@
+ 		goto err_out;
+ 	}
+ 
+-	bmp_buf_pos = 0;
++	/*
++	 * The bitmap buffer starts at byte bmp_pos >> 3, so the bit for
++	 * bmp_pos is bmp_pos & 7, not 0. Using 0 checks the wrong block when
++	 * resuming in the middle of the allocation (pos from an earlier call).
++	 */
++	bmp_buf_pos = bmp_pos & 7;
+ 	/* If the index block is not in use find the next one that is. */
+ 	while (!(bmp[bmp_buf_pos >> 3] & (1 << (bmp_buf_pos & 7)))) {
+ find_next_index_buffer:
+@@ -1326,7 +1331,7 @@
+ 		if (bmp_buf_pos >> 3 < bmp_buf_size)
+ 			continue;
+ 		/* Read next chunk from the index bitmap. */
+-		bmp_buf_pos = 0;
++		bmp_buf_pos = bmp_pos & 7;
+ 		if ((bmp_pos >> 3) + bmp_buf_size > bmp_na->data_size)
+ 			bmp_buf_size = bmp_na->data_size - (bmp_pos >> 3);
+ 		br = ntfs_attr_pread(bmp_na, bmp_pos >> 3, bmp_buf_size, bmp);
