@@ -1,6 +1,31 @@
---- a/libntfs-3g/dir.c	2026-10-04 13:51:19
-+++ b/libntfs-3g/dir.c	2026-10-04 13:51:19
-@@ -1313,7 +1313,12 @@
+From 1fd300eaadc36efcb29b88c72b975fe105687c45 Mon Sep 17 00:00:00 2001
+From: techyminati <techyminati@outlook.com>
+Date: Sun, 4 Oct 2026 16:02:55 +0530
+Subject: [PATCH] dir.c: fix resuming ntfs_readdir() in a large directory
+
+ntfs_readdir() reads the index bitmap starting at byte bmp_pos >> 3, but
+then starts testing bits at bmp_buf_pos = 0. When a listing is resumed
+from a position whose index block number is not a multiple of 8, the
+wrong bit gets checked: index blocks in use can be skipped and unused
+ones read, which shows up as missing files and "Failed to read index
+block" errors.
+
+Start at bit bmp_pos & 7 instead, both for the first bitmap chunk and
+when the next chunk is read.
+
+ntfs-3g itself always lists a directory in one go, so it never hits
+this. Callers that page through a directory (NFS, FSKit) do.
+
+Change-Id: I9b34e5ca6d3682fa61652d27f4e4899600b1b8d2
+---
+ libntfs-3g/dir.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/libntfs-3g/dir.c b/libntfs-3g/dir.c
+index 5cab5c54..27ba7132 100644
+--- a/libntfs-3g/dir.c
++++ b/libntfs-3g/dir.c
+@@ -1313,7 +1313,12 @@ skip_index_root:
  		goto err_out;
  	}
  
@@ -14,7 +39,7 @@
  	/* If the index block is not in use find the next one that is. */
  	while (!(bmp[bmp_buf_pos >> 3] & (1 << (bmp_buf_pos & 7)))) {
  find_next_index_buffer:
-@@ -1326,7 +1331,7 @@
+@@ -1326,7 +1331,7 @@ find_next_index_buffer:
  		if (bmp_buf_pos >> 3 < bmp_buf_size)
  			continue;
  		/* Read next chunk from the index bitmap. */
@@ -23,3 +48,6 @@
  		if ((bmp_pos >> 3) + bmp_buf_size > bmp_na->data_size)
  			bmp_buf_size = bmp_na->data_size - (bmp_pos >> 3);
  		br = ntfs_attr_pread(bmp_na, bmp_pos >> 3, bmp_buf_size, bmp);
+-- 
+2.46.0
+
