@@ -188,5 +188,6 @@ sudo "$BIN" install || die "setup failed"
 
 echo
 bold "Done! Plug in an NTFS drive and it shows up in Finder, ready to write to."
+info "Installed $("$BIN" version | head -1)"
 info "Drives that are plugged in right now get remounted read-write in a moment."
 info "To remove NTFS4Mac later: sudo ntfs4mac uninstall"
