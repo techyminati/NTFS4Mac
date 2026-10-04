@@ -189,6 +189,8 @@ static int run_mount(const char *bsd)
 	}
 	if (waitpid(pid, &status, 0) != pid)
 		return errno;
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 3)
+		return EBUSY;	/* another NTFS4Mac already has it */
 	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : EIO;
 }
 
@@ -226,7 +228,10 @@ static void schedule_mount(const char *bsd_in)
 
 		dlog("mounting %s read-write", bsd);
 		err = run_mount(bsd);
-		if (err) {
+		if (err == EBUSY) {
+			/* mounted read-write by a manual ntfs4mac mount */
+			dlog("%s is already mounted by NTFS4Mac", bsd);
+		} else if (err) {
 			dlog("could not mount %s read-write, letting macOS "
 				"mount it read only", bsd);
 			give_back(bsd);

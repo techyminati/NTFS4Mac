@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -194,6 +195,35 @@ static void eject_if_idle(const char *bsd)
 		err ? strerror(err) : "");
 }
 
+/*
+ * Only one NTFS4Mac may ever have a volume open: two libntfs-3g instances
+ * writing to the same NTFS would each allocate from their own copy of the
+ * bitmaps and corrupt it. The lock is held for the whole life of the
+ * server. Images lock the image file itself, drives a lock file named
+ * after the partition (O_NOFOLLOW so nobody can plant a symlink there).
+ */
+static int take_lock(const struct serve_opts *o)
+{
+	char path[1200];
+	int fd;
+
+	if (o->bsd[0]) {
+		snprintf(path, sizeof(path), "/tmp/ntfs4mac-%s.lock", o->bsd);
+		fd = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
+			0644);
+	} else {
+		fd = open(o->source, O_RDONLY | O_CLOEXEC);
+	}
+	if (fd < 0)
+		return -1;
+	if (flock(fd, LOCK_EX | LOCK_NB)) {
+		close(fd);
+		errno = EBUSY;
+		return -1;
+	}
+	return fd;
+}
+
 enum phase { MOUNTING, MOUNTED, UNMOUNTING, DONE };
 
 struct state {
@@ -322,7 +352,7 @@ int serve_main(const struct serve_opts *o)
 	bool made_dir = false;
 	uint16_t port = 0;
 	FILE *pf;
-	int err, rc = 1;
+	int err, rc = 1, lock_fd = -1;
 
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGTERM, on_signal);
@@ -340,6 +370,18 @@ int serve_main(const struct serve_opts *o)
 	else
 		snprintf(id, sizeof(id), "image-%d", getpid());
 	serve_mount_from(id, st.from, sizeof(st.from));
+
+	lock_fd = take_lock(o);
+	if (lock_fd < 0) {
+		if (errno == EBUSY)
+			report(st.status_fd, "BUSY %s is already mounted by "
+				"NTFS4Mac", o->bsd[0] ? o->bsd : o->source);
+		else
+			report(st.status_fd, "ERR cannot lock %s: %s",
+				o->bsd[0] ? o->bsd : o->source,
+				strerror(errno));
+		goto out;
+	}
 
 	/* take the partition away from Apple's read only driver */
 	if (o->bsd[0]) {
@@ -463,6 +505,9 @@ out:
 		eject_if_idle(o->bsd);
 	if (st.status_fd >= 0)
 		close(st.status_fd);
+	/* the volume is closed, someone else may have it now */
+	if (lock_fd >= 0)
+		close(lock_fd);
 	if (logf)
 		fclose(logf);
 	return rc;

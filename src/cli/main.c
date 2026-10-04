@@ -373,6 +373,10 @@ static int cmd_mount(int argc, char **argv)
 					"mounts it read-write anyway (riskier).\n");
 			return 0;
 		}
+		if (!strncmp(buf, "BUSY ", 5)) {
+			fprintf(stderr, "ntfs4mac: %s\n", buf + 5);
+			return 3;	/* the daemon looks for this */
+		}
 		fprintf(stderr, "ntfs4mac: %s\n", !strncmp(buf, "ERR ", 4) ?
 			buf + 4 : "failed to mount, see the log");
 		fprintf(stderr, "log: %s\n", o.logfile);
