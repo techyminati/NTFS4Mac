@@ -1,15 +1,15 @@
 # Builds and tests NTFS4Mac on every push and pull request.
-# Pushing a version tag (v0.1.0, ...) also publishes a GitHub release with
-# the universal binary, which is what install.sh downloads.
+# Pushing a version tag (0.1.0 or v0.1.0) also publishes a GitHub release
+# with the universal binary, which is what install.sh downloads.
 #
-#   git tag v0.1.0 && git push k v0.1.0
+#   git tag 0.1.0 && git push a 0.1.0
 
 name: Build and release
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v[0-9]*", "[0-9]*"]
   pull_request:
   workflow_dispatch:
 
@@ -30,11 +30,10 @@ jobs:
         run: brew install autoconf automake libtool
 
       - name: Check the tag matches the VERSION file
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          code="v$(cat VERSION)"
-          if [ "$code" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME but the VERSION file says $code"
+          if [ "${GITHUB_REF_NAME#v}" != "$(cat VERSION)" ]; then
+            echo "tag $GITHUB_REF_NAME but the VERSION file says $(cat VERSION)"
             exit 1
           fi
 
@@ -58,7 +57,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
