@@ -28,7 +28,7 @@ APP_OBJ   = $(patsubst src/%.c,build/obj/%.o,$(APP_SRC))
 APP_HDR   = $(wildcard src/nfs/*.h) $(wildcard src/cli/*.h)
 APP_LIBS  = $(LIBS) -framework DiskArbitration -framework IOKit
 
-.PHONY: all test clean ntfs3g
+.PHONY: all test clean ntfs3g dist
 
 all: build/libn4m.a build/enginetest build/ntfs4mac
 
@@ -57,6 +57,16 @@ build/ntfs4mac: $(APP_OBJ) build/libn4m.a $(NTFS3G)/lib/libntfs-3g.a
 
 test: all
 	./tests/run.sh
+
+# release tarball for install.sh: dist/ntfs4mac-macos.tar.gz (+ .sha256)
+dist: build/ntfs4mac
+	@rm -rf dist/ntfs4mac
+	@mkdir -p dist/ntfs4mac
+	cp build/ntfs4mac README.md LICENSE dist/ntfs4mac/
+	tar -czf dist/ntfs4mac-macos.tar.gz -C dist ntfs4mac
+	cd dist && shasum -a 256 ntfs4mac-macos.tar.gz > ntfs4mac-macos.tar.gz.sha256
+	@rm -rf dist/ntfs4mac
+	@echo "upload dist/ntfs4mac-macos.tar.gz and its .sha256 to a GitHub release"
 
 clean:
 	rm -rf build/obj build/libn4m.a build/enginetest build/ntfs4mac
