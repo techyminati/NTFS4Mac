@@ -227,12 +227,12 @@ static int cmd_mount(int argc, char **argv)
 				o.bsd, cur);
 			return 0;
 		}
-		if (geteuid() != 0) {
-			fprintf(stderr, "ntfs4mac: mounting a disk needs root, "
-				"run: sudo ntfs4mac mount %s\n", o.bsd);
+		snprintf(o.source, sizeof(o.source), "/dev/r%s", o.bsd);
+		if (access(o.source, o.readonly ? R_OK : R_OK | W_OK)) {
+			fprintf(stderr, "ntfs4mac: no access to %s, run: "
+				"sudo ntfs4mac mount %s\n", o.source, o.bsd);
 			return 1;
 		}
-		snprintf(o.source, sizeof(o.source), "/dev/r%s", o.bsd);
 	} else {
 		fprintf(stderr, "ntfs4mac: %s is not a disk (like disk4s1) or "
 			"an image file\n", target);
