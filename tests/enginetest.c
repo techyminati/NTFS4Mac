@@ -342,6 +342,25 @@ int main(int argc, char **argv)
 	ERR(n4m_rename(vol, ROOT, "B", ROOT, "y.txt"), ENOTDIR);
 	ERR(n4m_rename(vol, ROOT, "nope", ROOT, "x"), ENOENT);
 
+	section("remove and rename using different case");
+	{
+		uint64_t c1 = mk(ROOT, "CaseTest.txt", N4M_TYPE_FILE);
+		uint64_t c2 = mk(ROOT, "Mixed.Name.txt", N4M_TYPE_FILE);
+
+		(void)c1;
+		OK(n4m_remove(vol, ROOT, "casetest.TXT", false));
+		CHECK(find(ROOT, "CaseTest.txt") == 0, "removed via other case");
+		OK(n4m_rename(vol, ROOT, "MIXED.NAME.TXT", ROOT, "moved.txt"));
+		CHECK(find(ROOT, "moved.txt") == c2, "renamed via other case");
+		CHECK(find(ROOT, "Mixed.Name.txt") == 0, "old name gone");
+		OK(n4m_rename(vol, ROOT, "MOVED.TXT", ROOT, "Moved.txt"));
+		list_dir(ROOT, l, 0);
+		CHECK(listed(l, "Moved.txt") && !listed(l, "moved.txt"),
+			"case rename via other case");
+		OK(n4m_remove(vol, ROOT, "MOVED.txt", false));
+		CHECK(find(ROOT, "moved.txt") == 0, "gone");
+	}
+
 	section("hard links");
 	OK(n4m_link(vol, f, d, "link.txt", &a));
 	CHECK(a.nlink == 2, "nlink %u", a.nlink);
