@@ -51,14 +51,27 @@ static bool pending_take(struct n4m_volume *v, u64 ino)
  * Files whose real data lives somewhere we can not decode yet. Reading the
  * plain $DATA stream of those would silently return zeros, so refuse.
  */
+#define FILE_ATTR_RECALL_ON_DATA_ACCESS const_cpu_to_le32(0x00400000)
+#define IO_REPARSE_TAG_HSM	const_cpu_to_le32(0xC0000004)
+#define IO_REPARSE_TAG_HSM2	const_cpu_to_le32(0x80000006)
+
 static int check_readable(ntfs_inode *ni)
 {
 	le32 tag = 0;
 
+	/*
+	 * "Online only" files (OneDrive Files On-Demand and other cloud or
+	 * archive placeholders) look like normal files but their data is
+	 * not on this drive: the stream is one big hole of zeros.
+	 */
+	if (ni->flags & (FILE_ATTR_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN |
+			FILE_ATTR_RECALL_ON_DATA_ACCESS))
+		return ENOTSUP;
 	if (!(ni->flags & FILE_ATTR_REPARSE_POINT))
 		return 0;
 	n4m_reparse_tag(ni, &tag);
-	if (tag == IO_REPARSE_TAG_WOF || tag == IO_REPARSE_TAG_DEDUP)
+	if (tag == IO_REPARSE_TAG_WOF || tag == IO_REPARSE_TAG_DEDUP ||
+			tag == IO_REPARSE_TAG_HSM || tag == IO_REPARSE_TAG_HSM2)
 		return ENOTSUP;
 	if (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT ||
 			tag == IO_REPARSE_TAG_LX_SYMLINK)
