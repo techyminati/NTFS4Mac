@@ -63,6 +63,7 @@ dist: build/ntfs4mac
 	@rm -rf dist/ntfs4mac
 	@mkdir -p dist/ntfs4mac
 	cp build/ntfs4mac README.md LICENSE dist/ntfs4mac/
+	cp vendor/ntfs-3g/COPYING dist/ntfs4mac/COPYING.ntfs-3g
 	tar -czf dist/ntfs4mac-macos.tar.gz -C dist ntfs4mac
 	cd dist && shasum -a 256 ntfs4mac-macos.tar.gz > ntfs4mac-macos.tar.gz.sha256
 	@rm -rf dist/ntfs4mac
