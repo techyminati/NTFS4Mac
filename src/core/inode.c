@@ -70,7 +70,7 @@ void n4m_touch(struct n4m_volume *v, ntfs_inode *ni,
 }
 
 /* Works out what kind of object an inode is. */
-static int classify(ntfs_inode *ni, le32 *tagp)
+int n4m_classify(ntfs_inode *ni, le32 *tagp)
 {
 	bool isdir = (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY) != 0;
 	le32 tag = 0;
@@ -155,7 +155,7 @@ int n4m_fill_attr(struct n4m_volume *v, ntfs_inode *ni, n4m_attr *a)
 	a->ntfs_attrib = le32_to_cpu(ni->flags);
 	a->uid = v->uid;
 	a->gid = v->gid;
-	a->type = classify(ni, &tag);
+	a->type = n4m_classify(ni, &tag);
 	count_links(ni, &a->nlink, &a->parent);
 	if (ni->mft_no == FILE_root)
 		a->parent = FILE_root;
@@ -321,7 +321,7 @@ int n4m_lookup_ni(struct n4m_volume *v, ntfs_inode *dir_ni, const char *name,
 	return err;
 }
 
-static uint64_t parent_of(ntfs_inode *ni)
+uint64_t n4m_parent_of(ntfs_inode *ni)
 {
 	uint32_t nlink;
 	uint64_t parent;
@@ -350,7 +350,7 @@ int n4m_lookup(n4m_volume *v, uint64_t dir, const char *name, n4m_attr *attr)
 	if (!strcmp(name, "."))
 		mref = dir_ni->mft_no;
 	else if (!strcmp(name, ".."))
-		mref = parent_of(dir_ni);
+		mref = n4m_parent_of(dir_ni);
 	else
 		err = n4m_lookup_ni(v, dir_ni, name, &mref, NULL, NULL);
 	if (ntfs_inode_close(dir_ni) && !err)

@@ -99,6 +99,8 @@ int n4m_lookup_ni(struct n4m_volume *v, ntfs_inode *dir_ni,
 		const char *name, u64 *mref, ntfschar **matched,
 		int *matched_len);
 int n4m_reparse_tag(ntfs_inode *ni, le32 *tag);
+int n4m_classify(ntfs_inode *ni, le32 *tag);
+uint64_t n4m_parent_of(ntfs_inode *ni);
 void n4m_set_archive(ntfs_inode *ni);
 void n4m_touch(struct n4m_volume *v, ntfs_inode *ni,
 		ntfs_time_update_flags mask);
