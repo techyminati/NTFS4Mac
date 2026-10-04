@@ -23,16 +23,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # full history and tags, so the binary reports v0.1.0 and not a hash
+          fetch-depth: 0
 
       - name: Install build tools
         run: brew install autoconf automake libtool
 
-      - name: Check the tag matches the version in the code
+      - name: Check the tag matches the VERSION file
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          code="v$(sed -n 's/^#define N4M_VERSION "\(.*\)"/\1/p' src/core/n4m.h)"
+          code="v$(cat VERSION)"
           if [ "$code" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME but src/core/n4m.h says $code"
+            echo "tag $GITHUB_REF_NAME but the VERSION file says $code"
             exit 1
           fi
 
@@ -43,7 +45,9 @@ jobs:
         run: make test
 
       - name: Package
-        run: make dist
+        run: |
+          make dist
+          build/ntfs4mac version
 
       - uses: actions/upload-artifact@v4
         with:
