@@ -60,7 +60,7 @@ test: all
 
 # builds, shows the disclaimer and license, then sets up plug and play
 install: build/ntfs4mac
-	./install.sh
+	NTFS4MAC_FROM_SOURCE=1 ./install.sh
 
 uninstall:
 	sudo build/ntfs4mac uninstall
