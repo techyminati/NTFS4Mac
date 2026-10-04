@@ -4,17 +4,20 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/ntfs-3g"
-TMP="${TMPDIR:-/tmp}/ntfs4mac-test.$$"
-IMG="$TMP/test.img"
+# our own fresh temp folder, the only thing we ever delete
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/ntfs4mac-test.XXXXXX")"
+IMG="${TMP:?}/test.img"
 fail=0
 
-mkdir -p "$TMP"
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+	rm -f -- "${TMP:?}/test.img" "${TMP:?}/fix.log" "${TMP:?}/ls.log"
+	rmdir -- "${TMP:?}"
+}
+trap cleanup EXIT
 
 echo "== making a 512 MiB NTFS image"
-mkfile -n 512m "$IMG"
-"$BIN/sbin/mkntfs" -F -f -q -L N4MTest "$IMG" >/dev/null 2>&1 || {
-	echo "mkntfs failed"; exit 1; }
+"$ROOT/tests/mkimage.sh" "$IMG" 512m N4MTest >/dev/null || {
+	echo "could not create the test image"; exit 1; }
 
 echo "== engine test"
 "$ROOT/build/enginetest" "$IMG" || fail=1
