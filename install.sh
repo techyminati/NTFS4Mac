@@ -3,12 +3,16 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/techyminati/NTFS4Mac/main/install.sh | bash
 #
-# Gets ntfs4mac (the latest prebuilt release, or builds it from source when
-# there is none), then runs "sudo ntfs4mac install" to turn on plug and play.
-# Run it from inside a source checkout to install what you built yourself.
+# Shows the disclaimer and the CipherOS License 2.0 and only continues when
+# you accept them. Then it gets ntfs4mac (the latest prebuilt release, or
+# builds it from source when there is none) and runs "sudo ntfs4mac
+# install" to turn on plug and play. Run it from inside a source checkout
+# to install what you built yourself.
 #
 # Everything is downloaded and built in a fresh temporary folder, and that
 # folder is the only thing this script ever deletes.
+#
+# Non-interactive installs: NTFS4MAC_ACCEPT_LICENSE=yes accepts the terms.
 set -euo pipefail
 
 REPO="${NTFS4MAC_REPO:-techyminati/NTFS4Mac}"
@@ -34,6 +38,79 @@ oldest="$(printf '%s\n%s\n' "$MIN_MACOS" "$ver" |
 [ "$oldest" = "$MIN_MACOS" ] ||
 	die "NTFS4Mac needs macOS $MIN_MACOS or newer, this Mac has $ver."
 
+# running from a source checkout?
+here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P || true)"
+if [ -n "$here" ] && [ -f "$here/src/core/n4m.h" ] && [ -f "$here/Makefile" ]; then
+	SRC_HERE="$here"
+else
+	SRC_HERE=""
+fi
+
+# ---- disclaimer and license, nothing happens before they are accepted ----
+
+if [ -n "$SRC_HERE" ]; then
+	cp "$SRC_HERE/LICENSE" "$WORK/LICENSE"
+else
+	curl -fsSL -o "$WORK/LICENSE" \
+		"${NTFS4MAC_LICENSE_URL:-https://raw.githubusercontent.com/$REPO/main/LICENSE}" ||
+		die "could not download the license terms. Nothing was installed."
+fi
+[ -s "$WORK/LICENSE" ] || die "the license terms are empty. Nothing was installed."
+
+cat <<'EOF'
+
+==========================================================================
+                               DISCLAIMER
+==========================================================================
+
+  NTFS4Mac comes with no warranty of any kind. It doesn't touch your
+  Mac's own warranty, but it does write to your drives, and that part
+  is on you.
+
+  We are not responsible for lost files, corrupted partitions, dead
+  disks, angry Windows PCs, missed deadlines, thermonuclear war, or you
+  getting fired because the only copy of your presentation was on that
+  drive.
+
+  Please do some research if you have any concerns about this software
+  before installing it! YOU are choosing to install it, and if you point
+  the finger at us for messing up your drives, we will laugh at you.
+
+  Back up anything you care about, and always eject before unplugging.
+
+==========================================================================
+                    LICENSE: CipherOS License 2.0
+==========================================================================
+
+EOF
+fold -s -w 78 "$WORK/LICENSE"
+echo
+echo "=========================================================================="
+echo
+
+if [ "${NTFS4MAC_ACCEPT_LICENSE:-}" = yes ]; then
+	info "terms accepted with NTFS4MAC_ACCEPT_LICENSE=yes"
+else
+	# works with curl | bash too: the answer comes from the terminal
+	if ! (exec </dev/tty) 2>/dev/null; then
+		die "there is no terminal to ask you to accept the terms. Nothing was installed. (Run it in Terminal, or set NTFS4MAC_ACCEPT_LICENSE=yes.)"
+	fi
+	printf 'Do you accept the disclaimer and the CipherOS License 2.0?\n'
+	printf 'Type "yes" to accept and install, anything else cancels: '
+	answer=""
+	read -r answer </dev/tty || true
+	case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+	yes) ;;
+	*)
+		echo "Not accepted. Nothing was installed."
+		exit 1
+		;;
+	esac
+fi
+echo
+
+# ---- get ntfs4mac --------------------------------------------------------
+
 bold "Installing NTFS4Mac"
 
 build_from() {	# build_from <source dir>
@@ -58,10 +135,9 @@ build_from() {	# build_from <source dir>
 }
 
 BIN=""
-here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P || true)"
-if [ -n "$here" ] && [ -f "$here/src/core/n4m.h" ] && [ -f "$here/Makefile" ]; then
-	info "installing from the source in $here"
-	build_from "$here"
+if [ -n "$SRC_HERE" ]; then
+	info "installing from the source in $SRC_HERE"
+	build_from "$SRC_HERE"
 else
 	url="${NTFS4MAC_RELEASE_URL:-https://github.com/$REPO/releases/latest/download}/$ASSET"
 	info "downloading the latest release"
