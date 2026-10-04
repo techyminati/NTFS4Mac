@@ -125,20 +125,6 @@ static uint32_t get_fh_any(struct nfs_server *s, struct xdr_in *in,
 	return NFS3_OK;
 }
 
-/* Reads a handle that has to be a real file or folder. */
-static uint32_t get_fh(struct nfs_server *s, struct xdr_in *in, uint64_t *ref)
-{
-	struct fh fh;
-	uint32_t st = get_fh_any(s, in, &fh);
-
-	*ref = fh.ref;
-	if (st == NFS3_OK && fh.ad)
-		st = NFS3ERR_NOTDIR;
-	return st;
-}
-
-/* ---- attributes ------------------------------------------------------- */
-
 /* getattr that also checks the handle's sequence number */
 static int getattr_ref(struct nfs_server *s, uint64_t ref, n4m_attr *a)
 {
@@ -148,6 +134,28 @@ static int getattr_ref(struct nfs_server *s, uint64_t ref, n4m_attr *a)
 		err = ESTALE;	/* the MFT record got reused */
 	return err;
 }
+
+/*
+ * Reads a handle that has to be a real file or folder (mostly folders).
+ * The engine works on MFT record numbers only, so check here that the
+ * record still is the one the handle was made for: after a delete the
+ * record can be reused, and a stale handle must not act on the new item.
+ */
+static uint32_t get_fh(struct nfs_server *s, struct xdr_in *in, uint64_t *ref)
+{
+	struct fh fh;
+	uint32_t st = get_fh_any(s, in, &fh);
+	n4m_attr a;
+
+	*ref = fh.ref;
+	if (st == NFS3_OK && fh.ad)
+		st = NFS3ERR_NOTDIR;
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(getattr_ref(s, fh.ref, &a));
+	return st;
+}
+
+/* ---- attributes ------------------------------------------------------- */
 
 /* Attributes of the virtual "._name" file of base. */
 static void ad_fill(const n4m_attr *base, uint64_t size, n4m_attr *a)
@@ -1166,9 +1174,13 @@ static void p_commit(struct nfs_server *s, struct xdr_in *in,
 	struct fh fh;
 	uint32_t st = get_fh_any(s, in, &fh);
 
+	n4m_attr a;
+
 	xdr_get_u64(in);	/* offset */
 	xdr_get_u32(in);	/* count */
 	ARGS_OK(in, out);
+	if (st == NFS3_OK)
+		st = nfs_errno_to_stat(attr_of(s, &fh, &a));
 	if (st == NFS3_OK && !fh.ad)
 		st = nfs_errno_to_stat(n4m_close_write(s->vol,
 				ino_of(fh.ref)));
