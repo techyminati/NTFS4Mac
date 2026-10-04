@@ -193,6 +193,21 @@ int n4m_remove(n4m_volume *vol, uint64_t dir, const char *name, bool isdir);
 int n4m_rename(n4m_volume *vol, uint64_t fromdir, const char *fromname,
 		uint64_t todir, const char *toname);
 
+/*
+ * Named data streams (NTFS alternate data streams) on a file or folder.
+ * Writing or truncating creates the stream when it does not exist yet.
+ */
+#define N4M_APPLEDOUBLE_STREAM "com.apple.AppleDouble"
+int n4m_stream_size(n4m_volume *vol, uint64_t ino, const char *stream,
+		uint64_t *size);
+int n4m_stream_read(n4m_volume *vol, uint64_t ino, const char *stream,
+		uint64_t off, size_t len, void *buf, size_t *got);
+int n4m_stream_write(n4m_volume *vol, uint64_t ino, const char *stream,
+		uint64_t off, size_t len, const void *buf, size_t *written);
+int n4m_stream_truncate(n4m_volume *vol, uint64_t ino, const char *stream,
+		uint64_t size);
+int n4m_stream_remove(n4m_volume *vol, uint64_t ino, const char *stream);
+
 /* Extended attributes, stored as NTFS alternate data streams. */
 int n4m_listxattr(n4m_volume *vol, uint64_t ino, char *buf, size_t bufsz,
 		size_t *len);
