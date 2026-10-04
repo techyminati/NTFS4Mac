@@ -503,15 +503,26 @@ int uninstall_main(void)
 		fprintf(stderr, "run: sudo ntfs4mac uninstall\n");
 		return 1;
 	}
+	struct stat st;
+	int rc = 0;
+
 	run(argv);
+	/* exactly what install created, nothing else */
 	if (unlink(PLIST_PATH) && errno != ENOENT) {
 		fprintf(stderr, "ntfs4mac: cannot remove %s: %s\n", PLIST_PATH,
 			strerror(errno));
-		return 1;
+		rc = 1;
 	}
-	printf("auto-mount is off. Drives mounted right now stay mounted "
+	if (!lstat(INSTALL_BIN, &st) && unlink(INSTALL_BIN)) {
+		fprintf(stderr, "ntfs4mac: cannot remove %s: %s\n",
+			INSTALL_BIN, strerror(errno));
+		rc = 1;
+	}
+	unlink(SUPPORT_DIR "/ignore");
+	rmdir(SUPPORT_DIR);	/* only if nothing else is in there */
+	if (rc)
+		return rc;
+	printf("NTFS4Mac is removed. Drives mounted right now stay mounted "
 		"until you eject them.\n");
-	printf("the command is still at %s (delete it by hand if you want)\n",
-		INSTALL_BIN);
 	return 0;
 }
