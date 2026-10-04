@@ -348,6 +348,22 @@ static int cmd_mount(int argc, char **argv)
 			printf("Mounted read-write at %s\n", buf + 3);
 			return 0;
 		}
+		if (!strncmp(buf, "RO-", 3)) {
+			char *mp = strchr(buf, ' ');
+
+			printf("Mounted READ ONLY at %s\n", mp ? mp + 1 : "?");
+			if (!strncmp(buf, "RO-HIBERNATED", 13))
+				printf("Windows is hibernated on this drive "
+					"(Fast Startup). Writing now could lose "
+					"data.\nBoot Windows and shut it down "
+					"fully (hold Shift while clicking Shut "
+					"down), or turn off Fast Startup.\n");
+			else if (!strncmp(buf, "RO-UNCLEAN", 10))
+				printf("Windows did not close this drive "
+					"cleanly. Run chkdsk on it in Windows, "
+					"then try again.\n");
+			return 0;
+		}
 		fprintf(stderr, "ntfs4mac: %s\n", !strncmp(buf, "ERR ", 4) ?
 			buf + 4 : "failed to mount, see the log");
 		fprintf(stderr, "log: %s\n", o.logfile);

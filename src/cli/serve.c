@@ -207,6 +207,7 @@ struct state {
 	uint64_t started_ms, umount_ms, last_check_ms;
 	bool failed;
 	bool forced;
+	bool hibernated;
 };
 
 static uint64_t now_ms(void)
@@ -244,7 +245,12 @@ static bool should_stop(void *ctx)
 			if (WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
 					still_mounted(st->from, st->mp)) {
 				st->phase = MOUNTED;
-				report(st->status_fd, "OK %s", st->mp);
+				/* first word tells the CLI how it went */
+				report(st->status_fd, "%s %s",
+					!st->srv->readonly ? "OK" :
+					st->o->readonly ? "RO-ASKED" :
+					st->hibernated ? "RO-HIBERNATED" :
+					"RO-UNCLEAN", st->mp);
 				if (st->status_fd >= 0)
 					close(st->status_fd);
 				st->status_fd = -1;
@@ -401,6 +407,7 @@ int serve_main(const struct serve_opts *o)
 	srv.uid = o->uid;
 	srv.gid = o->gid;
 	srv.readonly = vi.readonly;
+	st.hibernated = vi.was_hibernated;
 	arc4random_buf(srv.writeverf, sizeof(srv.writeverf));
 	st.srv = &srv;
 	rpc = rpc_listen(&srv, &port);
